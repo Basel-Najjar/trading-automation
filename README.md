@@ -46,6 +46,20 @@ scanner validate [--offline]
 scanner cache info | scanner cache refresh
 ```
 
+### Streamlit app
+
+```
+uv run streamlit run src/scanner/app.py      # run from the repository root
+```
+
+- **Sidebar.** Pick a date (default today), and optionally strategies, deep-dive symbols and a forced refresh. Then
+  press **Run analysis**. The app shows the same HTML report as `scanner run`, and **Export report** downloads it.
+  The app does not write to `reports/`.
+- **Config tab.** Edit symbols, type, enabled, notes, sector ETF and the benchmark. **Save config** validates the
+  edit first and writes nothing if there are errors. It then rewrites `universe.csv` and `sector_map.csv` and the
+  `benchmark:` line in `settings.yaml`. The editor needs `universe.csv`, not `universe.txt`.
+- **Another config directory.** Set `SCANNER_CONFIG_DIR` to point the app at it.
+
 Use `uv run scanner …`, or activate `.venv`. All commands accept `--config-dir/-c`. Output commands also accept
 `--reports-dir`.
 
