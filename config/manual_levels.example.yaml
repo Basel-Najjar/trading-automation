@@ -1,0 +1,12 @@
+# manual_levels.yaml (OPTIONAL) — rename to manual_levels.yaml to use.
+# Owner-drawn levels per symbol. They are tagged "manual" and always participate.
+# Diagonal anchors dated after a replay --as-of date are ignored (no look-ahead).
+AAPL:
+  - type: horizontal
+    role: support
+    price: 200.00
+    note: "Prior breakout level"
+  - type: diagonal
+    role: support
+    anchors: [[2026-04-08, 172.00], [2026-08-01, 205.00]]
+    note: "Rising trendline from April low"

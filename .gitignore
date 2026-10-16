@@ -8,3 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Scanner runtime data
+cache/
+reports/
+.pytest_cache/
+.ruff_cache/

@@ -1,10 +1,44 @@
 [project]
 name = "trading-automation"
 version = "0.1.0"
-description = "Add your description here"
+description = "Technical Opportunity Scanner: daily-bar technical scanner mapping setups to options strategies"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "exchange-calendars>=4.13.2",
+    "jinja2>=3.1.6",
+    "numpy>=2.5.4",
     "pandas>=3.0.6",
-    "streamlit>=1.66.0",
+    "pyarrow>=26.0.0",
+    "pydantic>=2",
+    "pyyaml>=6.0.3",
+    "typer>=0.27.3",
+    "yfinance>=1.7.0",
+]
+
+[project.scripts]
+scanner = "scanner.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/scanner"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
 ]

@@ -1,0 +1,18 @@
+symbol,type,enabled,notes
+AAPL,stock,true,
+MSFT,stock,true,
+NVDA,stock,true,
+AMD,stock,true,
+AMZN,stock,true,
+TSLA,stock,true,
+HD,stock,true,
+JPM,stock,true,
+BAC,stock,true,
+XOM,stock,true,
+CVX,stock,true,
+UNH,stock,true,
+JNJ,stock,true,
+CAT,stock,true,
+GE,stock,true,
+QQQ,etf,true,Nasdaq-100
+IWM,etf,true,Russell 2000
