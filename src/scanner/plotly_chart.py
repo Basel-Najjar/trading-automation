@@ -1,6 +1,7 @@
 """Interactive Plotly chart for the Streamlit app (the HTML report keeps the static SVG in charts.py).
 
-Same content as `charts.svg_chart`: candles, SMA50/200, level zones and lines, signal bars, pivots and an RSI pane.
+Same content as `charts.svg_chart`: candles, SMA50/200, level zones and lines, signal bars, pivots and an RSI pane,
+plus volume bars overlaid along the bottom of the price pane. Only the candles have a tooltip (OHLC).
 The whole analysis window is plotted; the initial view shows the last `chart_bars` bars, so you can pan back.
 """
 
@@ -22,6 +23,9 @@ SMA_COLORS = {"sma50": "#2a78d6", "sma200": "#eb6834"}
 RSI_COLOR = "#6250d6"
 ZONE_FILL = {"support": "rgba(12,163,12,0.12)", "resistance": "rgba(208,59,59,0.12)"}
 SIGNAL_FILL = "rgba(237,161,0,0.18)"
+VOL_UP, VOL_DOWN = "rgba(12,163,12,0.30)", "rgba(208,59,59,0.30)"
+VOLUME_SHARE = 0.2  # the tallest visible volume bar reaches this fraction of the price pane
+PRICE_PANE = {"row": 1, "col": 1, "secondary_y": True}
 PIVOT_MUTED, PIVOT_USED = "rgba(128,128,128,0.55)", "#6250d6"
 HALF_DAY = timedelta(hours=12)
 
@@ -88,16 +92,14 @@ def _add_level(fig: go.Figure, sa: SymbolAnalysis, lv: Level, k: float, last: in
     name = f"{lv.id} · {role} {lv.value(last):,.2f}"
     fig.add_trace(go.Scatter(x=xs + xs[::-1], y=top + bot[::-1], fill="toself", fillcolor=ZONE_FILL[role],
                              line={"width": 0}, hoverinfo="skip", legendgroup=lv.id, showlegend=False, name=name),
-                  row=1, col=1)
+                  **PRICE_PANE)
     vals = [float(lv.values[t]) for t in ts]
     fig.add_trace(go.Scatter(
-        x=xs, y=vals, mode="lines+text", name=name, legendgroup=lv.id,
+        x=xs, y=vals, mode="lines+text", name=name, legendgroup=lv.id, hoverinfo="skip",
         line={"color": color, "width": 1.5, "dash": "dash"},
         text=[""] * (len(ts) - 1) + [lv.id], textposition="middle right", textfont={"color": color, "size": 11},
-        cliponaxis=False, customdata=np.column_stack([bot, top]),
-        hovertemplate=f"{lv.label} {role}: %{{y:,.2f}} (zone %{{customdata[0]:,.2f}}–%{{customdata[1]:,.2f}})"
-                      "<extra></extra>",
-    ), row=1, col=1)
+        cliponaxis=False,
+    ), **PRICE_PANE)
 
 
 def price_figure(sa: SymbolAnalysis, levels: list[Level], signal_bars: list[int], chart_bars: int, k: float,
@@ -108,19 +110,29 @@ def price_figure(sa: SymbolAnalysis, levels: list[Level], signal_bars: list[int]
     idx = range(0, last + 1)
     x = [_dt(d) for d in b.dates[:last + 1]]
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.78, 0.22], vertical_spacing=0.03)
+    # Row 1 has two y-axes: volume on the base axis (hidden, drawn underneath) and everything priced on the
+    # overlaying axis. Only the candles show a tooltip (OHLC); every other trace skips hover.
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.78, 0.22], vertical_spacing=0.03,
+                        specs=[[{"secondary_y": True}], [{}]])
+
+    # volume, coloured by the bar's direction
+    vol = np.nan_to_num(b.volume[:last + 1].astype(float), nan=0.0)
+    fig.add_trace(go.Bar(x=x, y=vol, name="Volume", hoverinfo="skip", marker_line_width=0,
+                         marker_color=[VOL_UP if c >= o else VOL_DOWN
+                                       for o, c in zip(b.open[:last + 1], b.close[:last + 1], strict=True)]),
+                  row=1, col=1, secondary_y=False)
 
     # candles (a provisional last bar is drawn separately and faded)
     done = last if sa.provisional else last + 1
     fig.add_trace(go.Candlestick(
         x=x[:done], open=b.open[:done], high=b.high[:done], low=b.low[:done], close=b.close[:done], name="Price",
         showlegend=False, **CANDLE,
-    ), row=1, col=1)
+    ), **PRICE_PANE)
     if sa.provisional:
         fig.add_trace(go.Candlestick(
             x=x[last:], open=b.open[last:last + 1], high=b.high[last:last + 1], low=b.low[last:last + 1],
             close=b.close[last:last + 1], name="Provisional bar", opacity=0.45, **CANDLE,
-        ), row=1, col=1)
+        ), **PRICE_PANE)
 
     # level zones + lines (each level toggles as one legend group)
     for lv in levels:
@@ -131,8 +143,7 @@ def price_figure(sa: SymbolAnalysis, levels: list[Level], signal_bars: list[int]
         ts = _finite(arr, idx)
         if len(ts) > 1:
             fig.add_trace(go.Scatter(x=[x[t] for t in ts], y=arr[ts], mode="lines", name=name.upper(),
-                                     line={"color": SMA_COLORS[name], "width": 2},
-                                     hovertemplate=f"{name.upper()}: %{{y:,.2f}}<extra></extra>"), row=1, col=1)
+                                     line={"color": SMA_COLORS[name], "width": 2}, hoverinfo="skip"), **PRICE_PANE)
 
     # pivots (those used for the trend state are emphasised)
     tech = sa.techs[0]
@@ -143,12 +154,10 @@ def price_figure(sa: SymbolAnalysis, levels: list[Level], signal_bars: list[int]
             continue
         fig.add_trace(go.Scatter(
             x=[_dt(p.date) for p in ps], y=[p.price for p in ps], mode="markers", name=f"Pivot {kind}s",
-            legendgroup="pivots", marker={"symbol": symbol, "size": [11 if (p.kind, p.idx) in used else 8 for p in ps],
-                                          "color": [PIVOT_USED if (p.kind, p.idx) in used else PIVOT_MUTED
-                                                    for p in ps]},
-            customdata=[["used for trend" if (p.kind, p.idx) in used else ""] for p in ps],
-            hovertemplate=f"pivot {kind} %{{y:,.2f}} %{{customdata[0]}}<extra></extra>",
-        ), row=1, col=1)
+            legendgroup="pivots", hoverinfo="skip",
+            marker={"symbol": symbol, "size": [11 if (p.kind, p.idx) in used else 8 for p in ps],
+                    "color": [PIVOT_USED if (p.kind, p.idx) in used else PIVOT_MUTED for p in ps]},
+        ), **PRICE_PANE)
 
     # signal bars
     for t in sorted(set(signal_bars)):
@@ -159,8 +168,8 @@ def price_figure(sa: SymbolAnalysis, levels: list[Level], signal_bars: list[int]
     # RSI pane
     ts = _finite(b.rsi, idx)
     fig.add_trace(go.Scatter(x=[x[t] for t in ts], y=b.rsi[ts], mode="lines", name="RSI",
-                             line={"color": RSI_COLOR, "width": 2}, showlegend=False,
-                             hovertemplate="RSI: %{y:.1f}<extra></extra>"), row=2, col=1)
+                             line={"color": RSI_COLOR, "width": 2}, showlegend=False, hoverinfo="skip"),
+                  row=2, col=1)
     for lvl in (rsi_ob, rsi_os):
         fig.add_hline(y=lvl, line={"dash": "dot", "width": 1, "color": "rgba(128,128,128,0.8)"}, row=2, col=1)
 
@@ -174,7 +183,11 @@ def price_figure(sa: SymbolAnalysis, levels: list[Level], signal_bars: list[int]
     if missing := missing_sessions(b.dates[:last + 1]):
         breaks.append({"values": missing})
     fig.update_xaxes(rangebreaks=breaks, range=[x[start] - HALF_DAY, x[last] + HALF_DAY])
-    fig.update_yaxes(range=[lo, hi], tickformat=",.2f", row=1, col=1)
+    # tickmode auto: an overlaying axis otherwise syncs its ticks to the hidden volume axis (odd price ticks)
+    fig.update_yaxes(range=[lo, hi], tickformat=",.2f", side="left", showgrid=True, tickmode="auto", **PRICE_PANE)
+    vmax = float(vol[start:last + 1].max()) if last >= start else 0.0
+    fig.update_yaxes(range=[0, (vmax or 1.0) / VOLUME_SHARE], visible=False, showgrid=False, fixedrange=True,
+                     row=1, col=1, secondary_y=False)
     fig.update_yaxes(range=[0, 100], fixedrange=True, tickvals=[rsi_os, rsi_ob], title_text="RSI",
                      row=2, col=1)
     return fig

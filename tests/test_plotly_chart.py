@@ -68,6 +68,28 @@ def test_nan_sma_is_skipped(sa):
     assert "SMA200" not in names and "SMA50" in names
 
 
+def test_only_candles_have_a_tooltip(sa):
+    fig = _fig(replace(sa, provisional=True), signal_bars=[sa.last_idx])
+    for t in fig.data:
+        if t.type == "candlestick":
+            assert t.hoverinfo in (None, "all")
+        else:
+            assert t.hoverinfo == "skip", t.name
+
+
+def test_volume_overlay_under_price(sa):
+    fig = _fig(sa)
+    vol = next(t for t in fig.data if t.name == "Volume")
+    price = next(t for t in fig.data if t.type == "candlestick")
+    assert vol.type == "bar" and len(vol.y) == sa.last_idx + 1
+    assert vol.yaxis == "y" and price.yaxis == "y2"  # volume on the base axis is drawn beneath the price axis
+    assert fig.layout.yaxis2.overlaying == "y" and fig.layout.yaxis.visible is False
+    visible_max = float(np.nanmax(sa.bars.volume[sa.last_idx - 149:sa.last_idx + 1]))
+    assert fig.layout.yaxis.range[1] == pytest.approx(visible_max / 0.2)
+    up = sa.bars.close[sa.last_idx] >= sa.bars.open[sa.last_idx]
+    assert ("12,163,12" in vol.marker.color[-1]) == up
+
+
 def test_missing_sessions_are_weekdays_without_bars():
     dates = [date(2026, 11, 25), date(2026, 11, 27), date(2026, 11, 30)]  # Thanksgiving (Thu 26th) has no bar
     assert missing_sessions(dates) == ["2026-11-26"]

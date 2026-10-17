@@ -83,16 +83,16 @@ The scanner is the **discovery layer only**. The owner takes the ranked shortlis
 
 ```
 config/
-  universe.csv | universe.txt     # watchlist
-  sector_map.csv                  # symbol → sector ETF (owner maintains)
+  universe.csv                    # watchlist + sector ETF per symbol (the only symbol file)
   strategies.yaml                 # the editable strategy playbook (§7, seed in Appendix A)
+  strategies.default.yaml         # preserved original playbook; the app's "restore defaults" copies it back
   settings.yaml                   # global technical parameters (§6.9)
   manual_levels.yaml              # OPTIONAL: owner-drawn levels per symbol (see §6.2.5)
   expected_reads.csv              # OPTIONAL: owner's known chart reads for replay validation (§8.2)
 ```
 
-- IN-1. **Universe:** `.csv` (`symbol` required; optional `type` (`etf|stock`), `enabled`, `notes`) **or** `.txt` (one symbol per line; `#` comments allowed). Symbols are normalized (uppercase, whitespace stripped); duplicates warned and de-duplicated.
-- IN-2. **Sector mapping:** `sector_map.csv` with columns `symbol,sector_etf`. Optionally, `universe.csv` may include a `sector_etf` column; if both exist, `sector_map.csv` wins. Symbols with no mapping skip the name-vs-sector relative-strength check (reported as `n/a`, not as a failure).
+- IN-1. **Universe:** `universe.csv` (`symbol` required; optional `type` (`etf|stock`), `sector_etf`, `enabled`, `notes`). Symbols are normalized (uppercase, whitespace stripped); duplicates warned and de-duplicated. (Changed 2026-10-16: `universe.txt` and `sector_map.csv` were consolidated into this one file.)
+- IN-2. **Sector mapping:** the `sector_etf` column of `universe.csv`. Symbols with no mapping skip the name-vs-sector relative-strength check (reported as `n/a`, not as a failure).
 - IN-3. **Benchmark:** SPY by default (`settings.yaml`).
 - IN-4. All input files are validated by `scanner validate` with specific, human-readable errors (file, row/key, problem). Unknown tickers (no yfinance data) are listed.
 

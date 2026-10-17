@@ -2,6 +2,11 @@
 
 `config/strategies.yaml` is your playbook. It is reloaded on every run, and no code changes are ever needed.
 
+You can edit it here by hand, or in the app: **Criteria → Edit rules** on a strategy sets `enabled` and the
+`technical:` keys from dropdowns. It rewrites only that strategy's lines and keeps your comments.
+`strategies.default.yaml` is the preserved original. **Restore defaults** copies it back over `strategies.yaml`. To
+change what "default" means, edit `strategies.default.yaml` directly.
+
 ## Typical edits
 
 **Disable a strategy** without deleting it:

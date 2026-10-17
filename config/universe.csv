@@ -1,159 +1,159 @@
-symbol,type,enabled,notes
-SPY,etf,true,
-QQQ,etf,true,
-IWM,etf,true,
-EEM,etf,true,
-EWZ,etf,true,
-TLT,etf,true,
-SLV,etf,true,
-GLD,etf,true,
-A,stock,true,Agilent Technologies Inc
-AAL,stock,true,American Airlines Group
-AAPL,stock,true,Apple Inc.
-ABBV,stock,true,AbbVie Inc
-ABNB,stock,true,Airbnb Inc
-ABT,stock,true,Abbott Laboratories
-ADBE,stock,true,Adobe Inc.
-ADM,stock,true,Archer-Daniels-Midland Company
-AEM,stock,true,Agnico Eagle Mines Limited
-AGI,stock,true,Alamos Gold Inc
-ALC,stock,true,Alcon AG
-ALK,stock,true,Alaska Air Group Inc
-AMT,stock,true,American Tower Corp
-AMZN,stock,true,Amazon.com Inc
-ANET,stock,true,Arista Networks
-APH,stock,true,Amphenol Corporation
-ARE,stock,true,Alexandria Real Estate Equities Inc
-AVGO,stock,true,Broadcom Inc
-AXP,stock,true,American Express Company
-AZN,stock,true,AstraZeneca PLC
-BA,stock,true,The Boeing Company
-BABA,stock,true,Alibaba Group Holding Ltd
-BAC,stock,true,Bank of America Corp
-BAM,stock,true,Brookfield Asset Management Ltd.
-BHP,stock,true,BHP Group Limited
-BIDU,stock,true,Baidu Inc
-BILI,stock,true,Bilibili Inc
-BIRK,stock,true,Birkenstock Holding plc
-BKNG,stock,true,Booking Holdings Inc
-BKR,stock,true,Baker Hughes Co
-BMY,stock,true,Bristol-Myers Squibb Company
-BN,stock,true,Brookfield Corp
-BNY,stock,true,The Bank of New York Mellon Corporation
-BP,stock,true,BP PLC ADR
-BTI,stock,true,British American Tobacco p.l.c.
-C,stock,true,Citigroup Inc.
-CARR,stock,true,Carrier Global Corp
-CHKP,stock,true,Check Point Software Technologies Ltd
-CL,stock,true,Colgate-Palmolive Company
-CLX,stock,true,The Clorox Company
-CMCSA,stock,true,Comcast Corp
-CMG,stock,true,Chipotle Mexican Grill Inc
-COF,stock,true,Capital One Financial Corporation
-COP,stock,true,ConocoPhillips
-CPRT,stock,true,Copart Inc
-CRK,stock,true,Comstock Resources Inc
-CRM,stock,true,Salesforce.com Inc
-CSCO,stock,true,Cisco Systems Inc
-CSGP,stock,true,CoStar Group Inc
-CTSH,stock,true,Cognizant Technology Solutions Corp Class A
-CVE,stock,true,Cenovus Energy Inc
-CVS,stock,true,CVS Health Corp
-CVX,stock,true,Chevron Corp
-DAL,stock,true,Delta Air Lines Inc
-DB,stock,true,Deutsche Bank AG
-DHR,stock,true,Danaher Corporation
-DIS,stock,true,Walt Disney Company
-DVN,stock,true,Devon Energy Corporation
-EIX,stock,true,Edison International
-EOG,stock,true,EOG Resources Inc
-EQT,stock,true,EQT Corporation
-F,stock,true,Ford Motor Company
-FANG,stock,true,Diamondback Energy Inc
-FAST,stock,true,Fastenal Company
-GE,stock,true,GE Aerospace
-GFI,stock,true,Gold Fields Ltd ADR
-GFS,stock,true,Globalfoundries Inc
-GH,stock,true,Guardant Health Inc
-GIS,stock,true,General Mills Inc
-GM,stock,true,General Motors Company
-GOOG,stock,true,Alphabet Inc Class C
-GOOGL,stock,true,Alphabet Inc Class A
-GSK,stock,true,GlaxoSmithKline PLC ADR
-HAL,stock,true,Halliburton Company
-HD,stock,true,The Home Depot Inc
-IBM,stock,true,International Business Machines
-JD,stock,true,JD.com Inc Adr
-JNJ,stock,true,Johnson & Johnson
-KDP,stock,true,Keurig Dr Pepper Inc
-KMB,stock,true,Kimberly-Clark Corporation
-KMI,stock,true,Kinder Morgan Inc
-KMX,stock,true,CarMax Inc
-KO,stock,true,The Coca-Cola Company
-KR,stock,true,Kroger Company
-LEN,stock,true,Lennar Corporation
-LOW,stock,true,Lowe's Companies Inc
-LULU,stock,true,Lululemon Athletica Inc.
-LUV,stock,true,Southwest Airlines Company
-LYB,stock,true,LyondellBasell Industries NV
-MCD,stock,true,McDonald’s Corporation
-MDLZ,stock,true,Mondelez International Inc
-MDT,stock,true,Medtronic PLC
-MKC,stock,true,McCormick & Company Incorporated
-MNST,stock,true,Monster Beverage Corp
-MO,stock,true,Altria Group
-MRK,stock,true,Merck & Company Inc
-MS,stock,true,Morgan Stanley
-NCLH,stock,true,Norwegian Cruise Line Holdings Ltd
-NFLX,stock,true,Netflix Inc
-NKE,stock,true,Nike Inc
-NOW,stock,true,ServiceNow Inc
-NVDA,stock,true,NVIDIA Corporation
-NVO,stock,true,Novo Nordisk A/S
-OKE,stock,true,ONEOK Inc
-ORCL,stock,true,Oracle Corporation
-ORLY,stock,true,O’Reilly Automotive Inc
-OXY,stock,true,Occidental Petroleum Corporation
-PAYX,stock,true,Paychex Inc
-PDD,stock,true,PDD Holdings Inc.
-PEP,stock,true,PepsiCo Inc
-PLD,stock,true,Prologis Inc
-PM,stock,true,Philip Morris International Inc
-PYPL,stock,true,PayPal Holdings Inc
-QCOM,stock,true,Qualcomm Incorporated
-RIO,stock,true,Rio Tinto ADR
-RTX,stock,true,RTX Corporation
-SBLK,stock,true,Star Bulk Carriers Corp
-SBSW,stock,true,Sibanye Gold Ltd ADR
-SBUX,stock,true,Starbucks Corporation
-SCHW,stock,true,Charles Schwab Corp
-SHEL,stock,true,Shell PLC ADR
-SLB,stock,true,Schlumberger NV
-SNOW,stock,true,Snowflake Inc.
-SNY,stock,true,Sanofi ADR
-SOFI,stock,true,SoFi Technologies Inc.
-STRC,stock,true,MicroStrategy Incorporated Variable Rate Series A Perpetual Stretch Preferred Stock
-SU,stock,true,Suncor Energy Inc
-T,stock,true,AT&T Inc.
-TCOM,stock,true,Trip.com Group Ltd ADR
-TFC,stock,true,Truist Financial Corp
-TGT,stock,true,Target Corporation
-TJX,stock,true,The TJX Companies Inc
-TMUS,stock,true,T-Mobile US Inc
-TTE,stock,true,TotalEnergies SE ADR
-TTWO,stock,true,Take-Two Interactive Software Inc
-UBER,stock,true,Uber Technologies Inc
-UBS,stock,true,UBS Group AG
-UL,stock,true,Unilever PLC ADR
-UPS,stock,true,United Parcel Service Inc
-VALE,stock,true,Vale SA ADR
-VIK,stock,true,Viking Holdings Ltd
-VRNS,stock,true,Varonis Systems
-VZ,stock,true,Verizon Communications Inc
-WFC,stock,true,Wells Fargo & Company
-WMB,stock,true,Williams Companies Inc
-WMT,stock,true,Walmart Inc.
-WSC,stock,true,Willscot Mobile Mini Holdings Corp A
-XOM,stock,true,Exxon Mobil Corp
-Z,stock,true,Zillow Group Inc Class C
-ZTS,stock,true,Zoetis Inc
+symbol,type,sector_etf,enabled,notes
+SPY,etf,,true,
+QQQ,etf,,true,
+IWM,etf,,true,
+EEM,etf,,true,
+EWZ,etf,,true,
+TLT,etf,,true,
+SLV,etf,,true,
+GLD,etf,,true,
+A,stock,XLV,true,Agilent Technologies Inc
+AAL,stock,XLI,true,American Airlines Group
+AAPL,stock,XLK,true,Apple Inc.
+ABBV,stock,XLV,true,AbbVie Inc
+ABNB,stock,XLY,true,Airbnb Inc
+ABT,stock,XLV,true,Abbott Laboratories
+ADBE,stock,XLK,true,Adobe Inc.
+ADM,stock,XLP,true,Archer-Daniels-Midland Company
+AEM,stock,XLB,true,Agnico Eagle Mines Limited
+AGI,stock,XLB,true,Alamos Gold Inc
+ALC,stock,XLV,true,Alcon AG
+ALK,stock,XLI,true,Alaska Air Group Inc
+AMT,stock,XLRE,true,American Tower Corp
+AMZN,stock,XLY,true,Amazon.com Inc
+ANET,stock,XLK,true,Arista Networks
+APH,stock,XLK,true,Amphenol Corporation
+ARE,stock,XLRE,true,Alexandria Real Estate Equities Inc
+AVGO,stock,XLK,true,Broadcom Inc
+AXP,stock,XLF,true,American Express Company
+AZN,stock,XLV,true,AstraZeneca PLC
+BA,stock,XLI,true,The Boeing Company
+BABA,stock,XLY,true,Alibaba Group Holding Ltd
+BAC,stock,XLF,true,Bank of America Corp
+BAM,stock,XLF,true,Brookfield Asset Management Ltd.
+BHP,stock,XLB,true,BHP Group Limited
+BIDU,stock,XLC,true,Baidu Inc
+BILI,stock,XLC,true,Bilibili Inc
+BIRK,stock,XLY,true,Birkenstock Holding plc
+BKNG,stock,XLY,true,Booking Holdings Inc
+BKR,stock,XLE,true,Baker Hughes Co
+BMY,stock,XLV,true,Bristol-Myers Squibb Company
+BN,stock,XLF,true,Brookfield Corp
+BNY,stock,XLF,true,The Bank of New York Mellon Corporation
+BP,stock,XLE,true,BP PLC ADR
+BTI,stock,XLP,true,British American Tobacco p.l.c.
+C,stock,XLF,true,Citigroup Inc.
+CARR,stock,XLI,true,Carrier Global Corp
+CHKP,stock,XLK,true,Check Point Software Technologies Ltd
+CL,stock,XLP,true,Colgate-Palmolive Company
+CLX,stock,XLP,true,The Clorox Company
+CMCSA,stock,XLC,true,Comcast Corp
+CMG,stock,XLY,true,Chipotle Mexican Grill Inc
+COF,stock,XLF,true,Capital One Financial Corporation
+COP,stock,XLE,true,ConocoPhillips
+CPRT,stock,XLI,true,Copart Inc
+CRK,stock,XLE,true,Comstock Resources Inc
+CRM,stock,XLK,true,Salesforce.com Inc
+CSCO,stock,XLK,true,Cisco Systems Inc
+CSGP,stock,XLRE,true,CoStar Group Inc
+CTSH,stock,XLK,true,Cognizant Technology Solutions Corp Class A
+CVE,stock,XLE,true,Cenovus Energy Inc
+CVS,stock,XLV,true,CVS Health Corp
+CVX,stock,XLE,true,Chevron Corp
+DAL,stock,XLI,true,Delta Air Lines Inc
+DB,stock,XLF,true,Deutsche Bank AG
+DHR,stock,XLV,true,Danaher Corporation
+DIS,stock,XLC,true,Walt Disney Company
+DVN,stock,XLE,true,Devon Energy Corporation
+EIX,stock,XLU,true,Edison International
+EOG,stock,XLE,true,EOG Resources Inc
+EQT,stock,XLE,true,EQT Corporation
+F,stock,XLY,true,Ford Motor Company
+FANG,stock,XLE,true,Diamondback Energy Inc
+FAST,stock,XLI,true,Fastenal Company
+GE,stock,XLI,true,GE Aerospace
+GFI,stock,XLB,true,Gold Fields Ltd ADR
+GFS,stock,XLK,true,Globalfoundries Inc
+GH,stock,XLV,true,Guardant Health Inc
+GIS,stock,XLP,true,General Mills Inc
+GM,stock,XLY,true,General Motors Company
+GOOG,stock,XLC,true,Alphabet Inc Class C
+GOOGL,stock,XLC,true,Alphabet Inc Class A
+GSK,stock,XLV,true,GlaxoSmithKline PLC ADR
+HAL,stock,XLE,true,Halliburton Company
+HD,stock,XLY,true,The Home Depot Inc
+IBM,stock,XLK,true,International Business Machines
+JD,stock,XLY,true,JD.com Inc Adr
+JNJ,stock,XLV,true,Johnson & Johnson
+KDP,stock,XLP,true,Keurig Dr Pepper Inc
+KMB,stock,XLP,true,Kimberly-Clark Corporation
+KMI,stock,XLE,true,Kinder Morgan Inc
+KMX,stock,XLY,true,CarMax Inc
+KO,stock,XLP,true,The Coca-Cola Company
+KR,stock,XLP,true,Kroger Company
+LEN,stock,XLY,true,Lennar Corporation
+LOW,stock,XLY,true,Lowe's Companies Inc
+LULU,stock,XLY,true,Lululemon Athletica Inc.
+LUV,stock,XLI,true,Southwest Airlines Company
+LYB,stock,XLB,true,LyondellBasell Industries NV
+MCD,stock,XLY,true,McDonald’s Corporation
+MDLZ,stock,XLP,true,Mondelez International Inc
+MDT,stock,XLV,true,Medtronic PLC
+MKC,stock,XLP,true,McCormick & Company Incorporated
+MNST,stock,XLP,true,Monster Beverage Corp
+MO,stock,XLP,true,Altria Group
+MRK,stock,XLV,true,Merck & Company Inc
+MS,stock,XLF,true,Morgan Stanley
+NCLH,stock,XLY,true,Norwegian Cruise Line Holdings Ltd
+NFLX,stock,XLC,true,Netflix Inc
+NKE,stock,XLY,true,Nike Inc
+NOW,stock,XLK,true,ServiceNow Inc
+NVDA,stock,XLK,true,NVIDIA Corporation
+NVO,stock,XLV,true,Novo Nordisk A/S
+OKE,stock,XLE,true,ONEOK Inc
+ORCL,stock,XLK,true,Oracle Corporation
+ORLY,stock,XLY,true,O’Reilly Automotive Inc
+OXY,stock,XLE,true,Occidental Petroleum Corporation
+PAYX,stock,XLK,true,Paychex Inc
+PDD,stock,XLY,true,PDD Holdings Inc.
+PEP,stock,XLP,true,PepsiCo Inc
+PLD,stock,XLRE,true,Prologis Inc
+PM,stock,XLP,true,Philip Morris International Inc
+PYPL,stock,XLF,true,PayPal Holdings Inc
+QCOM,stock,XLK,true,Qualcomm Incorporated
+RIO,stock,XLB,true,Rio Tinto ADR
+RTX,stock,XLI,true,RTX Corporation
+SBLK,stock,XLI,true,Star Bulk Carriers Corp
+SBSW,stock,XLB,true,Sibanye Gold Ltd ADR
+SBUX,stock,XLY,true,Starbucks Corporation
+SCHW,stock,XLF,true,Charles Schwab Corp
+SHEL,stock,XLE,true,Shell PLC ADR
+SLB,stock,XLE,true,Schlumberger NV
+SNOW,stock,XLK,true,Snowflake Inc.
+SNY,stock,XLV,true,Sanofi ADR
+SOFI,stock,XLF,true,SoFi Technologies Inc.
+STRC,stock,XLK,true,MicroStrategy Incorporated Variable Rate Series A Perpetual Stretch Preferred Stock
+SU,stock,XLE,true,Suncor Energy Inc
+T,stock,XLC,true,AT&T Inc.
+TCOM,stock,XLY,true,Trip.com Group Ltd ADR
+TFC,stock,XLF,true,Truist Financial Corp
+TGT,stock,XLP,true,Target Corporation
+TJX,stock,XLY,true,The TJX Companies Inc
+TMUS,stock,XLC,true,T-Mobile US Inc
+TTE,stock,XLE,true,TotalEnergies SE ADR
+TTWO,stock,XLC,true,Take-Two Interactive Software Inc
+UBER,stock,XLK,true,Uber Technologies Inc
+UBS,stock,XLF,true,UBS Group AG
+UL,stock,XLP,true,Unilever PLC ADR
+UPS,stock,XLI,true,United Parcel Service Inc
+VALE,stock,XLB,true,Vale SA ADR
+VIK,stock,XLY,true,Viking Holdings Ltd
+VRNS,stock,XLK,true,Varonis Systems
+VZ,stock,XLC,true,Verizon Communications Inc
+WFC,stock,XLF,true,Wells Fargo & Company
+WMB,stock,XLE,true,Williams Companies Inc
+WMT,stock,XLP,true,Walmart Inc.
+WSC,stock,XLI,true,Willscot Mobile Mini Holdings Corp A
+XOM,stock,XLE,true,Exxon Mobil Corp
+Z,stock,XLC,true,Zillow Group Inc Class C
+ZTS,stock,XLV,true,Zoetis Inc

@@ -534,89 +534,70 @@ def _clean_symbol(s: str) -> str:
     return s.strip().upper()
 
 
+LEGACY_FILES = {
+    "universe.txt": "symbols now live only in universe.csv (columns symbol,type,sector_etf,enabled,notes); move the "
+                    "symbols there and delete universe.txt",
+    "sector_map.csv": "sector ETFs now live in universe.csv's sector_etf column; move the mappings there and delete "
+                      "sector_map.csv",
+}
+
+
 def load_universe(root: Path, issues: list[Issue]) -> list[UniverseEntry] | None:
-    csv_p, txt_p = root / "universe.csv", root / "universe.txt"
-    if csv_p.exists() and txt_p.exists():
-        issues.append(Issue("universe", None, "", "both universe.csv and universe.txt exist — keep only one"))
+    """universe.csv: symbol (required), type (stock/etf), sector_etf, enabled, notes. The only symbol config file."""
+    for name, why in LEGACY_FILES.items():
+        if (root / name).exists():
+            issues.append(Issue(name, None, "", f"no longer supported: {why}"))
+    csv_p = root / "universe.csv"
+    if not csv_p.exists():
+        issues.append(Issue("universe.csv", None, "", "missing config/universe.csv"))
         return None
+    if any(i.file in LEGACY_FILES for i in issues):
+        return None
+    fname = csv_p.name
     entries: list[UniverseEntry] = []
-    if csv_p.exists():
-        fname = csv_p.name
-        with csv_p.open(newline="", encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            cols = [c.strip().lower() for c in (reader.fieldnames or [])]
-            if "symbol" not in cols:
-                issues.append(Issue(fname, 1, "", "missing required column 'symbol'"))
+    with csv_p.open(newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        cols = [c.strip().lower() for c in (reader.fieldnames or [])]
+        if "symbol" not in cols:
+            issues.append(Issue(fname, 1, "", "missing required column 'symbol'"))
+            return None
+        for n, row in enumerate(reader, start=2):
+            row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
+            sym = _clean_symbol(row.get("symbol", ""))
+            if not sym:
+                issues.append(Issue(fname, n, "symbol", "empty symbol — row ignored", "warning"))
+                continue
+            typ = (row.get("type") or "stock").lower()
+            if typ not in ("etf", "stock"):
+                issues.append(Issue(fname, n, "type", f"type must be 'etf' or 'stock', got '{typ}'"))
                 return None
-            for n, row in enumerate(reader, start=2):
-                row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
-                sym = _clean_symbol(row.get("symbol", ""))
-                if not sym:
-                    issues.append(Issue(fname, n, "symbol", "empty symbol — row ignored", "warning"))
-                    continue
-                typ = (row.get("type") or "stock").lower()
-                if typ not in ("etf", "stock"):
-                    issues.append(Issue(fname, n, "type", f"type must be 'etf' or 'stock', got '{typ}'"))
-                    return None
-                en = (row.get("enabled") or "true").lower()
-                if en not in ("true", "false", "1", "0", "yes", "no", "y", "n"):
-                    issues.append(Issue(fname, n, "enabled", f"enabled must be true/false, got '{en}'"))
-                    return None
-                entries.append(
-                    UniverseEntry(sym, typ, en in ("true", "1", "yes", "y"), row.get("notes", ""),
-                                  _clean_symbol(row["sector_etf"]) if row.get("sector_etf") else None)
-                )
-    elif txt_p.exists():
-        for line in txt_p.read_text(encoding="utf-8").splitlines():
-            sym = _clean_symbol(line.split("#", 1)[0])
-            if sym:
-                entries.append(UniverseEntry(sym))
-    else:
-        issues.append(Issue("universe", None, "", "missing config/universe.csv or config/universe.txt"))
-        return None
+            en = (row.get("enabled") or "true").lower()
+            if en not in ("true", "false", "1", "0", "yes", "no", "y", "n"):
+                issues.append(Issue(fname, n, "enabled", f"enabled must be true/false, got '{en}'"))
+                return None
+            entries.append(
+                UniverseEntry(sym, typ, en in ("true", "1", "yes", "y"), row.get("notes", ""),
+                              _clean_symbol(row["sector_etf"]) if row.get("sector_etf") else None)
+            )
     seen: set[str] = set()
     deduped = []
     for e in entries:
         if e.symbol in seen:
-            issues.append(Issue("universe", None, e.symbol, "duplicate symbol — de-duplicated", "warning"))
+            issues.append(Issue(fname, None, e.symbol, "duplicate symbol — de-duplicated", "warning"))
             continue
         seen.add(e.symbol)
         deduped.append(e)
     if not any(e.enabled for e in deduped):
-        issues.append(Issue("universe", None, "", "no enabled symbols"))
+        issues.append(Issue(fname, None, "", "no enabled symbols"))
         return None
+    for e in deduped:
+        if e.enabled and not e.sector_etf and e.type != "etf":
+            issues.append(Issue(fname, None, e.symbol, "no sector_etf — name-vs-sector check will be n/a", "warning"))
     return deduped
 
 
-def load_sector_map(root: Path, universe: list[UniverseEntry], issues: list[Issue]) -> dict[str, str]:
-    mapping = {e.symbol: e.sector_etf for e in universe if e.sector_etf}
-    p = root / "sector_map.csv"
-    if p.exists():
-        with p.open(newline="", encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            cols = [c.strip().lower() for c in (reader.fieldnames or [])]
-            if not {"symbol", "sector_etf"} <= set(cols):
-                issues.append(Issue(p.name, 1, "", "columns must be 'symbol,sector_etf'"))
-                return mapping
-            seen: set[str] = set()
-            for n, row in enumerate(reader, start=2):
-                row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
-                sym, etf = _clean_symbol(row.get("symbol", "")), _clean_symbol(row.get("sector_etf", ""))
-                if not sym or not etf:
-                    issues.append(Issue(p.name, n, "", "empty symbol or sector_etf — row ignored", "warning"))
-                    continue
-                if sym in seen:
-                    issues.append(Issue(p.name, n, sym, "duplicate mapping — last one wins", "warning"))
-                seen.add(sym)
-                mapping[sym] = etf  # sector_map.csv wins over universe.csv column
-    universe_syms = {e.symbol for e in universe}
-    for e in universe:
-        if e.enabled and e.symbol not in mapping and e.type != "etf":
-            issues.append(Issue("sector_map", None, e.symbol,
-                                "no sector ETF mapping — name-vs-sector check will be n/a", "warning"))
-    for sym in sorted(set(mapping) - universe_syms):
-        issues.append(Issue("sector_map", None, sym, "mapped symbol not in universe (ignored)", "warning"))
-    return mapping
+def sector_map_of(universe: list[UniverseEntry]) -> dict[str, str]:
+    return {e.symbol: e.sector_etf for e in universe if e.sector_etf}
 
 
 def load_manual_levels(root: Path, issues: list[Issue]) -> dict[str, list[ManualLevel]]:
@@ -682,15 +663,14 @@ def load_config(root: Path) -> tuple[Config | None, list[Issue]]:
     settings = load_settings(root / "settings.yaml", issues)
     strategies = load_strategies(root / "strategies.yaml", issues)
     universe = load_universe(root, issues)
-    sector_map = load_sector_map(root, universe, issues) if universe is not None else {}
+    sector_map = sector_map_of(universe) if universe is not None else {}
     manual = load_manual_levels(root, issues)
     reads = load_expected_reads(root, issues)
     if any(i.severity == "error" for i in issues) or None in (settings, strategies, universe):
         return None, issues
     hashes = {
         name: _file_hash(root / name)
-        for name in ("settings.yaml", "strategies.yaml", "universe.csv", "universe.txt", "sector_map.csv",
-                     "manual_levels.yaml")
+        for name in ("settings.yaml", "strategies.yaml", "universe.csv", "manual_levels.yaml")
         if (root / name).exists()
     }
     hashes["settings_effective"] = settings.digest()

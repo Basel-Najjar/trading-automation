@@ -8,12 +8,13 @@ from itertools import product
 import pytest
 
 from conftest import ROOT
-from scanner.config import load_config
+from scanner.config import load_config, load_strategies
 from scanner.flow import classify_flow
 from scanner.models import BIASES, NA, FlowResult, NearResult, SignalResult, Tri
 from scanner.strategies import evaluate_strategy, watch_nears
 
 CFG, _ = load_config(ROOT / "config")
+CFG.strategies = load_strategies(ROOT / "config" / "strategies.default.yaml", [])  # the pinned seed playbook
 S = CFG.settings
 KIND = {"support_hold": "hold", "resistance_hold": "hold", "support_break": "break", "resistance_break": "break",
         "bullish_engulfing": "pattern", "bearish_engulfing": "pattern"}

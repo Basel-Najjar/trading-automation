@@ -146,7 +146,8 @@ def fake_net(monkeypatch, market_frames):
 def test_cli_validate_exit_codes(config_dir):
     r = CliRunner().invoke(cli.app, ["validate", "--offline", "-c", str(config_dir)])
     assert r.exit_code == 2 and "CCC" in r.output  # unmapped symbol warning
-    (config_dir / "sector_map.csv").write_text("symbol,sector_etf\nAAA,XLK\nBBB,XLK\nCCC,XLK\n", encoding="utf-8")
+    p = config_dir / "universe.csv"
+    p.write_text(p.read_text(encoding="utf-8").replace("CCC,stock,,", "CCC,stock,XLK,"), encoding="utf-8")
     assert CliRunner().invoke(cli.app, ["validate", "--offline", "-c", str(config_dir)]).exit_code == 0
     p = config_dir / "strategies.yaml"
     p.write_text(p.read_text(encoding="utf-8").replace("resistance_break", "resistence_break", 1), encoding="utf-8")
@@ -203,6 +204,8 @@ def test_no_out_of_scope_data_paths():
         src = p.read_text(encoding="utf-8")
         names = {t.string for t in tokenize.generate_tokens(io.StringIO(src).readline) if t.type == tokenize.NAME}
         allowed = {"orats_checklist"}  # display-only checklist text (SP-3), never evaluated
+        if p.name == "app.py":
+            allowed.add("options")  # Streamlit's dropdown keyword (SelectboxColumn(options=...)), not option chains
         bad = sorted(n for n in names - allowed if forbidden & set(n.lower().split("_")))
         assert not bad, (p.name, bad)
         yf_ok = {"download", "Ticker"} if p.name == "data.py" else {"download"}

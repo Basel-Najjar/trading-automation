@@ -8,9 +8,10 @@
   status: complete
   bias: bullish
   technical:
-    trend: [any]
+    trend: [uptrend]
     signals_all: [resistance_break]   # decision B5: 2-bar break required; engulfing alone does not qualify
-    not_extended: auto            # bullish → not extended up (RSI < 70)
+    signals_any: [bullish_engulfing]
+    not_extended: up            # bullish → not extended up (RSI < 70)
     alignment: soft
   construction:
     - "Buy 0.4–0.6Δ call 10–45 DTE"
@@ -36,9 +37,10 @@
   status: complete
   bias: bearish
   technical:
-    trend: [any]
+    trend: [downtrend]
     signals_all: [support_break]      # decision B5: 2-bar break required; engulfing alone does not qualify
-    not_extended: auto            # bearish → not extended down (RSI > 30)
+    signals_any: [bearish_engulfing]
+    not_extended: down            # bearish → not extended down (RSI > 30)
     alignment: soft
   construction:
     - "Buy 0.4–0.6Δ put 10–45 DTE"
@@ -65,7 +67,7 @@
   bias: non_bearish
   technical:
     trend: [uptrend, range]
-    signals_any: [support_hold]
+    signals_any: [support_hold, approaching_support]
     not_extended: none
     alignment: soft
   construction:
@@ -100,7 +102,7 @@
   bias: non_bullish
   technical:
     trend: [downtrend, range]
-    signals_any: [resistance_hold]
+    signals_any: [resistance_hold, approaching_resistance, bearish_engulfing]
     not_extended: none
     alignment: soft
   construction:
@@ -136,8 +138,8 @@
   technical:
     trend: [range]
     signals_all: [range_bound, range_mid]
-    signals_any: []
-    not_extended: none
+    signals_any: [resistance_hold, support_hold]
+    not_extended: auto
     alignment: ignore
   construction:
     - "Sell 0.45–0.55Δ put (call) 10–30 DTE"
@@ -170,7 +172,7 @@
   status: complete
   bias: non_bearish
   technical:
-    trend: [uptrend]
+    trend: [uptrend, range]
     signals_any: [support_hold, bullish_engulfing]
     not_extended: up
     alignment: soft

@@ -99,25 +99,30 @@ def test_bad_setting_type(config_dir):
     assert any("pivots.pivot_window" in e for e in errors)
 
 
-def test_universe_txt_and_csv(config_dir):
+def test_universe_csv(config_dir):
     cfg, errors, _ = _issues(config_dir)
     assert [u.symbol for u in cfg.universe] == ["AAA", "BBB", "CCC"]
-    (config_dir / "universe.txt").unlink()
+    assert cfg.sector_map == {"AAA": "XLK", "BBB": "XLK"}
     (config_dir / "universe.csv").write_text(
-        "symbol,type,enabled,notes,sector_etf\n aaa ,stock,true,,XLY\nbbb,etf,false,,\nAAA,stock,true,,\nddd,,,,\n",
-        encoding="utf-8")
+        "symbol,type,enabled,notes,sector_etf\n aaa ,stock,true,,xly\nbbb,etf,false,,\nAAA,stock,true,,\nddd,,,,\n",
+        encoding="utf-8")  # column order does not matter
     cfg, errors, warnings = _issues(config_dir)
     assert not errors
     assert [u.symbol for u in cfg.universe] == ["AAA", "BBB", "DDD"]
     assert cfg.symbols == ["AAA", "DDD"]
     assert any("duplicate symbol" in w for w in warnings)
-    assert cfg.sector_for("AAA") == "XLK"  # sector_map.csv wins over the universe column
+    assert cfg.sector_for("AAA") == "XLY" and cfg.sector_for("DDD") is None
 
 
-def test_both_universe_files_is_error(config_dir):
-    (config_dir / "universe.csv").write_text("symbol\nAAA\n", encoding="utf-8")
+def test_legacy_symbol_files_are_errors(config_dir):
+    for name, text in (("universe.txt", "AAA\n"), ("sector_map.csv", "symbol,sector_etf\nAAA,XLK\n")):
+        (config_dir / name).write_text(text, encoding="utf-8")
+        cfg, errors, _ = _issues(config_dir)
+        assert cfg is None and any(name in e and "no longer supported" in e for e in errors)
+        (config_dir / name).unlink()
+    (config_dir / "universe.csv").unlink()
     cfg, errors, _ = _issues(config_dir)
-    assert cfg is None and any("both universe.csv and universe.txt" in e for e in errors)
+    assert cfg is None and any("missing config/universe.csv" in e for e in errors)
 
 
 def test_missing_files(tmp_path):
@@ -128,7 +133,7 @@ def test_missing_files(tmp_path):
 
 def test_unmapped_symbol_warns(config_dir):
     _, _, warnings = _issues(config_dir)
-    assert any("CCC" in w and "no sector ETF mapping" in w for w in warnings)
+    assert any("CCC" in w and "no sector_etf" in w for w in warnings)
 
 
 def test_expected_reads_parsing(config_dir):

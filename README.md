@@ -22,9 +22,9 @@ uv run scanner run               # writes reports/<date>/scan.html
 
 | File | Purpose |
 |---|---|
-| `universe.csv` or `universe.txt` | Watchlist. CSV columns: `symbol` (required), `type` (`stock`/`etf`), `enabled`, `notes`, optional `sector_etf`. TXT: one symbol per line, `#` comments allowed. Keep only one of the two files. |
-| `sector_map.csv` | `symbol,sector_etf`. It wins over the universe's `sector_etf` column. Unmapped symbols show name-vs-sector as `n/a`. |
+| `universe.csv` | The only symbol file. Columns: `symbol` (required), `type` (`stock`/`etf`), `sector_etf`, `enabled`, `notes`. A blank `sector_etf` shows name-vs-sector as `n/a`. `universe.txt` and `sector_map.csv` are no longer read; if either exists, validation fails with a message to merge it into `universe.csv`. |
 | `strategies.yaml` | Your playbook. See [docs/editing-strategies.md](docs/editing-strategies.md). |
+| `strategies.default.yaml` | The preserved original playbook. The app's **Restore defaults** copies it over `strategies.yaml`. Never read by the scanner. |
 | `settings.yaml` | All technical parameters, with defaults. Keys marked `[added]` are not in the spec's §6.9 (see Assumptions). |
 | `manual_levels.yaml` | Optional owner-drawn levels (see `manual_levels.example.yaml`). |
 | `expected_reads.csv` | Optional chart reads for `check-reads` (see `expected_reads.example.csv`). Separate multiple expected items with `;`. |
@@ -54,25 +54,31 @@ uv run streamlit run src/scanner/app.py      # run from the repository root
 
 - **Sidebar.** Pick a date (default today) and optionally force a data refresh, then press **Run analysis**. Every run
   scans all enabled symbols and all active strategies. All filtering happens after the scan.
-- **Top symbols.** Cards rank symbols by their best strategy's share of rules met. PENDING_CLOSE rules count as not
-  met. Ties go to the best candidate score. A slider sets the number of cards (default 10). Hover a card's symbol
+- **Top symbols.** Cards show the best strategy's candidate score (0–100) and its rules met. Symbols with a full
+  match come first, highest score first. Symbols with no candidate show "—" and follow, ranked by share of rules met
+  (PENDING_CLOSE rules count as not met). A slider sets the number of cards (default 10). Hover a card's symbol
   line or **View** button for the ticker description.
 - **Ticker descriptions.** The name is your `notes` from `universe.csv`, or else the yfinance name. The summary is
   the yfinance business summary. Both are display only and cached in `cache/profiles.json` for 30 days; **Force data
   refresh** refetches them.
-- **Strategies and details.** Click **View** on a card to list that symbol's strategies, sorted by % of rules met.
-  Click a strategy row to see its details: the ticker description, rule evidence, an interactive Plotly chart, alert
+- **Details and strategies.** Click **View** on a card to show that symbol's best strategy right below the cards,
+  with that symbol's strategies (sorted by % of rules met) underneath. Click a strategy row to switch the details
+  above to it. The details show the ticker description, rule evidence, an interactive Plotly chart, alert
   prices, nearest levels, score breakdown, plan and checklists. In the chart you can zoom, pan back through the full
   history, hover, and click legend entries to hide levels. Double-click resets the view.
 - **Criteria tab.** Shows the exact logic each strategy is scanned with, built from `strategies.yaml`,
   `settings.yaml` (per-strategy overrides applied) and the signal registry. Rules appear in the same order and with
-  the same names as the rule list in Results.
+  the same names as the rule list in Results. **Edit rules** on a strategy sets `enabled` and the technical rules
+  (`trend`, `signals_all`, `signals_any`, `not_extended`, `alignment`) from dropdowns that offer only valid values.
+  Saving validates first, then rewrites only that strategy's lines in `strategies.yaml`; comments and everything else
+  are kept. Strategies that differ from `strategies.default.yaml` show a **modified** badge, and **Restore defaults**
+  puts the original back. Saving or restoring clears the current results.
 - **Deep dive.** Pick symbols and/or strategies to filter the full HTML report. Picked symbols show every picked
   strategy, including rules that did not match. **Export report** downloads the report as shown. The app does not
   write to `reports/`.
-- **Config tab.** Edit symbols, type, enabled, notes, sector ETF and the benchmark. **Save config** validates the
-  edit first and writes nothing if there are errors. It then rewrites `universe.csv` and `sector_map.csv` and the
-  `benchmark:` line in `settings.yaml`. The editor needs `universe.csv`, not `universe.txt`.
+- **Config tab.** Edit symbols, type, sector ETF, enabled, notes and the benchmark. **Save config** validates the
+  edit first and writes nothing if there are errors. It then rewrites `universe.csv` and the `benchmark:` line in
+  `settings.yaml`.
 - **Another config directory.** Set `SCANNER_CONFIG_DIR` to point the app at it.
 
 Use `uv run scanner …`, or activate `.venv`. All commands accept `--config-dir/-c`. Output commands also accept
@@ -202,7 +208,8 @@ The spec's stated defaults are implemented as written unless listed here. Everyt
   definitions per signal are in `signals.py` (`register_near`).
 - The relative volume denominator is the average of the 20 bars **before** the current bar.
 - Benchmark failure does not abort the run: flow components become `n/a` and the run exits with code 2.
-- Both `universe.csv` and `universe.txt` present is an error. `expected_reads.csv` separates multiple items with `;`.
+- Symbols live only in `universe.csv` (owner, 2026-10-16); a leftover `universe.txt` or `sector_map.csv` is an error.
+  `expected_reads.csv` separates multiple items with `;`.
 - `run --symbol` and `--strategy` write `scan_<SYMBOL>.html` and `scan_strategy_<id>.html` so the full report is not overwritten.
 - Data-quality volume checks cover the charted period (`chart_bars`); missing-bar checks cover the whole window.
 - **Recent gaps (owner, 2026-10-16).** A symbol is skipped if any open in the last `gap_lookback_bars` (15,
