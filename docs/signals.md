@@ -197,18 +197,31 @@ If no such level exists the text reads `n/a (no level found)`.
 
 ## Score (0–100)
 
-The score is the weighted sum of eight components, each scaled to 0–1. Weights and scaling are in `settings.yaml → scoring`.
+A score belongs to one (symbol, strategy) pair. It is the weighted sum of nine components, each scaled to 0–1.
+Scaling is in `settings.yaml → scoring`. Weights come from `settings.yaml → scoring.weights`, and any key in a
+strategy's own `scoring: weights:` (in `strategies.yaml`) replaces the global one for that strategy. `scanner
+validate` warns when a strategy's combined weights do not sum to 100.
 
 | Component | Raw value |
 |---|---|
-| signal | by kind: break 1.0, hold 0.75, pattern 0.5, context 0.2 |
+| signal | kind score (break 1.0, hold 0.75, pattern 0.5, context 0.2) ÷ the best kind among the strategy's own signal rules. A hold scores 1.0 for a strategy whose best possible signal is a hold |
 | level_quality | quality / `level_quality_cap` (+ `role_reversal_bonus`), capped at 1 |
 | confluence | (distinct overlapping level types − 1) / 2, capped at 1 |
-| trend_fit | 1.0 if the strategy lists trend states (the match guarantees one fits); `trend_fit_any` for `[any]` |
+| trend_fit | strength of the trend state the strategy asked for. Up/downtrend: mean of the pivot step (smaller of the last high-to-high and low-to-low moves, ÷ `trend_step_atr` ATRs) and the SMA stack (close vs SMA50, SMA50 vs SMA200, SMA50 vs `trend_sma_slope_bars` ago; checks without data are skipped). Range: mean of boundary touches ÷ `range_touch_cap` and width scaled between `range_width_atr`. `trend_fit_any` for `[any]` or a mixed trend |
 | flow | `flow_scores` (with_flow 1, mixed 0.5, countertrend 0; `alignment: ignore` scores 0.5) |
-| rsi_headroom | bullish/non_bearish: (70 − RSI)/30; bearish/non_bullish: (RSI − 30)/30; neutral: 0.5 |
+| room | bullish/non_bearish: ATRs from the close to the nearest resistance zone ÷ `room_atr` (1.0 if none). Bearish/non_bullish: same to the nearest support. Neutral: 1 − 2·|range position − 0.5| in a range, else nearer ÷ farther distance. The signal's own level is skipped |
+| rsi_headroom | bullish/non_bearish: (70 − RSI)/30; bearish/non_bullish: (RSI − 30)/30; neutral: 1 − |RSI − 50| / `rsi_neutral_scale` |
 | entry_quality | holds: 1 − distance from level / `approach_atr`; breaks: 1 − distance beyond zone / `chase_atr`; patterns: 1 at a level, else 0.5; context: 0.5 |
 | age | `age_scores` (age 0: 1.0, age 1: 0.5) |
+
+Default weights:
+
+| Profile | Strategies | signal | level_quality | confluence | trend_fit | flow | room | rsi_headroom | entry_quality | age |
+|---|---|---|---|---|---|---|---|---|---|---|
+| global | PMCC, PMCP | 25 | 15 | 10 | 15 | 10 | 10 | 5 | 5 | 5 |
+| directional debit | Bull Call, Bear Put, Long Stock | 20 | 10 | 5 | 20 | 10 | 15 | 10 | 5 | 5 |
+| premium sold at a level | Bull Put, Bear Call, Wheel | 20 | 25 | 15 | 10 | 10 | 0 | 0 | 15 | 5 |
+| range-bound | Neutral Calendar | 15 | 10 | 5 | 25 | 0 | 25 | 10 | 5 | 5 |
 
 If several signals qualify a candidate, the one giving the highest score is the **primary signal**.
 

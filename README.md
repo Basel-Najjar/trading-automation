@@ -184,6 +184,10 @@ The spec's stated defaults are implemented as written unless listed here. Everyt
 - **Per-strategy overrides** are limited to `signals:` keys and the RSI thresholds.
 - **Scoring normalisations** use the defaults listed in [docs/signals.md](docs/signals.md#score-0100), to be tuned
   with replay.
+- **Scores belong to a (symbol, strategy) pair** (2026-10-16, owner request). The signal is scored against the best
+  signal that strategy allows. `trend_fit` measures the strength of the trend state it asked for. `room` and RSI
+  headroom follow its bias. A strategy's `scoring: weights:` in `strategies.yaml` replace the global weights.
+  Defaults: directional debit, premium sold at a level, and range-bound profiles; PMCC/PMCP use the global weights.
 
 **Interpretations of gaps in the spec:**
 - Pivots: strictly greater than the left side, ≥ the right side, so the first bar of a flat top wins. Windows with
