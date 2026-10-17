@@ -128,9 +128,9 @@ def test_edit_touches_only_that_strategy(config_dir):
 def test_edit_flow_style_technical_and_keeps_overrides(config_dir):
     p = config_dir / STRATEGIES
     p.write_text(p.read_text(encoding="utf-8").replace(
-        "    alignment: soft\n  construction:\n    - \"Sell a ~0.3Δ put 5–20 DTE\"",
-        "    alignment: soft\n    overrides: {full_body_ratio: 0.8}  # mine\n  construction:\n"
-        "    - \"Sell a ~0.3Δ put 5–20 DTE\"", 1), encoding="utf-8")
+        "    signals_any: [support_hold]\n    not_extended: none\n    alignment: soft\n",
+        "    signals_any: [support_hold]\n    not_extended: none\n    alignment: soft\n"
+        "    overrides: {full_body_ratio: 0.8}  # mine\n", 1), encoding="utf-8")
     new = {"trend": ["range"], "signals_all": ["range_bound"], "signals_any": [], "not_extended": "none",
            "alignment": "ignore"}
     assert not [i for i in save_strategy(config_dir, "flyagonal", new) if i.severity == "error"]

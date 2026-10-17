@@ -111,14 +111,30 @@ class FlowSettings(_Strict):
     oppose: dict[str, list[str]] = Field(default_factory=_default_oppose)
 
 
+SCORE_COMPONENTS: tuple[str, ...] = ("signal", "level_quality", "confluence", "trend_fit", "flow", "room",
+                                      "rsi_headroom", "entry_quality", "age")
+
+
+def _known_weights(v: dict[str, float]) -> dict[str, float]:
+    unknown = set(v) - set(SCORE_COMPONENTS)
+    if unknown:
+        bad = sorted(unknown)
+        raise ValueError(f"unknown weight(s) {bad}{_suggest(bad[0], SCORE_COMPONENTS)}; "
+                         f"allowed: {list(SCORE_COMPONENTS)}")
+    if any(w < 0 for w in v.values()):
+        raise ValueError("weights must be ≥ 0")
+    return v
+
+
 class ScoringSettings(_Strict):
     weights: dict[str, float] = Field(
         default_factory=lambda: {
-            "signal": 30,
-            "level_quality": 20,
+            "signal": 25,
+            "level_quality": 15,
             "confluence": 10,
-            "trend_fit": 10,
-            "flow": 15,
+            "trend_fit": 15,
+            "flow": 10,
+            "room": 10,
             "rsi_headroom": 5,
             "entry_quality": 5,
             "age": 5,
@@ -130,7 +146,13 @@ class ScoringSettings(_Strict):
     level_quality_cap: float = 6.0
     role_reversal_bonus: float = 0.1
     rsi_headroom_scale: float = 30.0
+    rsi_neutral_scale: float = 20.0
     trend_fit_any: float = 0.5
+    trend_step_atr: float = 2.0
+    trend_sma_slope_bars: int = 10
+    range_touch_cap: int = 8
+    range_width_atr: list[float] = Field(default_factory=lambda: [2.0, 6.0])
+    room_atr: float = 3.0
     flow_scores: dict[str, float] = Field(
         default_factory=lambda: {"with_flow": 1.0, "mixed": 0.5, "countertrend": 0.0, "ignored": 0.5}
     )
@@ -138,13 +160,26 @@ class ScoringSettings(_Strict):
 
     @field_validator("weights")
     @classmethod
-    def _known_weights(cls, v: dict[str, float]) -> dict[str, float]:
-        known = {"signal", "level_quality", "confluence", "trend_fit", "flow", "rsi_headroom",
-                 "entry_quality", "age"}
-        unknown = set(v) - known
-        if unknown:
-            raise ValueError(f"unknown weight(s) {sorted(unknown)}; allowed: {sorted(known)}")
+    def _weights(cls, v: dict[str, float]) -> dict[str, float]:
+        return _known_weights(v)
+
+    @field_validator("range_width_atr")
+    @classmethod
+    def _width(cls, v: list[float]) -> list[float]:
+        if len(v) != 2 or not 0 <= v[0] < v[1]:
+            raise ValueError("range_width_atr must be [min, full] with 0 ≤ min < full")
         return v
+
+    @field_validator("trend_step_atr", "room_atr", "rsi_neutral_scale", "rsi_headroom_scale", "level_quality_cap")
+    @classmethod
+    def _positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("must be > 0")
+        return v
+
+    def weights_for(self, strat: Strategy) -> dict[str, float]:
+        """Global weights with the strategy's `scoring.weights` laid over them."""
+        return {**self.weights, **strat.scoring.weights}
 
 
 class ReportSettings(_Strict):
@@ -251,6 +286,22 @@ class Technical(_Strict):
         return self.trend == ["any"] and not self.signals_all and not self.signals_any
 
 
+class StrategyScoring(_Strict):
+    """Per-strategy score weights; keys given here replace the global `settings.yaml → scoring.weights`."""
+
+    weights: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("weights", mode="before")
+    @classmethod
+    def _none(cls, v: Any) -> Any:
+        return {} if v is None else v
+
+    @field_validator("weights")
+    @classmethod
+    def _weights(cls, v: dict[str, float]) -> dict[str, float]:
+        return _known_weights(v)
+
+
 class Strategy(BaseModel):
     model_config = ConfigDict(extra="allow")  # unknown display-only keys are preserved and shown
 
@@ -261,6 +312,7 @@ class Strategy(BaseModel):
     bias: Literal["bullish", "bearish", "non_bearish", "non_bullish", "neutral"]
     description: str = ""
     technical: Technical = Field(default_factory=Technical)
+    scoring: StrategyScoring = Field(default_factory=StrategyScoring)
     construction: list[str] = Field(default_factory=list)
     orats_checklist: list[str] = Field(default_factory=list)
     other_manual_checks: list[str] = Field(default_factory=list)
@@ -270,7 +322,7 @@ class Strategy(BaseModel):
         _none_to_list
     )
 
-    @field_validator("technical", "plan", mode="before")
+    @field_validator("technical", "scoring", "plan", mode="before")
     @classmethod
     def _none_to_dict(cls, v: Any) -> Any:
         return {} if v is None else v
@@ -654,6 +706,20 @@ def _file_hash(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else ""
 
 
+def _weight_sum_issues(path: Path, settings: Settings, strategies: list[Strategy]) -> list[Issue]:
+    """Warn for each strategy whose global + own weights do not sum to 100 (scores are then not 0–100)."""
+    out = []
+    for st in strategies:
+        if not st.scoring.weights:
+            continue
+        total = sum(settings.scoring.weights_for(st).values())
+        if abs(total - 100) > 1e-6:
+            out.append(Issue(path.name, None, f"{st.id}.scoring.weights",
+                             f"weights (global + this strategy's) sum to {total:g}; scores are scaled to 0–100 "
+                             "only when they sum to 100", "warning"))
+    return out
+
+
 def load_config(root: Path) -> tuple[Config | None, list[Issue]]:
     """Load and validate every owner-maintained file. Returns (None, issues) when any error is present."""
     root = Path(root)
@@ -668,6 +734,7 @@ def load_config(root: Path) -> tuple[Config | None, list[Issue]]:
     reads = load_expected_reads(root, issues)
     if any(i.severity == "error" for i in issues) or None in (settings, strategies, universe):
         return None, issues
+    issues += _weight_sum_issues(root / "strategies.yaml", settings, strategies)
     hashes = {
         name: _file_hash(root / name)
         for name in ("settings.yaml", "strategies.yaml", "universe.csv", "manual_levels.yaml")

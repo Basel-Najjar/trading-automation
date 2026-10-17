@@ -1,5 +1,5 @@
 # strategies.yaml — the strategy playbook. Edit freely; run `scanner validate` after changes.
-# Evaluated by the scanner:  bias, technical
+# Evaluated by the scanner:  bias, technical, scoring (weights replace settings.yaml → scoring.weights)
 # Display-only (shown on cards): construction, orats_checklist, other_manual_checks, plan
 
 - id: bull_call_spread
@@ -12,6 +12,8 @@
     signals_all: [resistance_break]   # decision B5: 2-bar break required; engulfing alone does not qualify
     not_extended: auto            # bullish → not extended up (RSI < 70)
     alignment: soft
+  scoring:
+    weights: { signal: 20, level_quality: 10, confluence: 5, trend_fit: 20, flow: 10, room: 15, rsi_headroom: 10, entry_quality: 5, age: 5 }  # directional debit: trend strength, room to run, RSI headroom
   construction:
     - "Buy 0.4–0.6Δ call 10–45 DTE"
     - "Sell 1–4 strikes higher call, same expiration"
@@ -40,6 +42,8 @@
     signals_all: [support_break]      # decision B5: 2-bar break required; engulfing alone does not qualify
     not_extended: auto            # bearish → not extended down (RSI > 30)
     alignment: soft
+  scoring:
+    weights: { signal: 20, level_quality: 10, confluence: 5, trend_fit: 20, flow: 10, room: 15, rsi_headroom: 10, entry_quality: 5, age: 5 }  # directional debit: trend strength, room to run, RSI headroom
   construction:
     - "Buy 0.4–0.6Δ put 10–45 DTE"
     - "Sell 1–4 strikes lower put, same expiration"
@@ -68,6 +72,8 @@
     signals_any: [support_hold]
     not_extended: none
     alignment: soft
+  scoring:
+    weights: { signal: 20, level_quality: 25, confluence: 15, trend_fit: 10, flow: 10, room: 0, rsi_headroom: 0, entry_quality: 15, age: 5 }  # premium sold at a level: level quality, confluence, entry at the level
   construction:
     - "Sell a ~0.3Δ put 5–20 DTE"
     - "Buy a put one strike lower, same expiration"
@@ -103,6 +109,8 @@
     signals_any: [resistance_hold]
     not_extended: none
     alignment: soft
+  scoring:
+    weights: { signal: 20, level_quality: 25, confluence: 15, trend_fit: 10, flow: 10, room: 0, rsi_headroom: 0, entry_quality: 15, age: 5 }  # premium sold at a level: level quality, confluence, entry at the level
   construction:
     - "Sell a ~0.3Δ call 5–20 DTE"
     - "Buy a call one strike higher, same expiration"
@@ -139,6 +147,8 @@
     signals_any: []
     not_extended: none
     alignment: ignore
+  scoring:
+    weights: { signal: 15, level_quality: 10, confluence: 5, trend_fit: 25, flow: 0, room: 25, rsi_headroom: 10, entry_quality: 5, age: 5 }  # range-bound: range quality, price centred, RSI near 50; flow ignored
   construction:
     - "Sell 0.45–0.55Δ put (call) 10–30 DTE"
     - "Buy identical strike put (call) +7 DTE"
@@ -240,6 +250,8 @@
     signals_any: [support_hold]
     not_extended: none
     alignment: soft                # owner favors rising relative strength vs sector ETF
+  scoring:
+    weights: { signal: 20, level_quality: 25, confluence: 15, trend_fit: 10, flow: 10, room: 0, rsi_headroom: 0, entry_quality: 15, age: 5 }  # premium sold at a level: level quality, confluence, entry at the level
   construction:
     - "Sell a cash-secured 0.3–0.5Δ put 7–21 DTE"
     - "Buy a protective put 30–60 DTE to retain at least 25% of credit on short put"
@@ -313,6 +325,8 @@
     signals_any: [support_hold]
     not_extended: up
     alignment: soft                # owner favors rising relative strength vs sector ETF
+  scoring:
+    weights: { signal: 20, level_quality: 10, confluence: 5, trend_fit: 20, flow: 10, room: 15, rsi_headroom: 10, entry_quality: 5, age: 5 }  # directional debit: trend strength, room to run, RSI headroom
   construction:
     - "Buy shares of stock outright"
   orats_checklist: []

@@ -94,3 +94,15 @@ def test_missing_sessions_are_weekdays_without_bars():
     dates = [date(2026, 11, 25), date(2026, 11, 27), date(2026, 11, 30)]  # Thanksgiving (Thu 26th) has no bar
     assert missing_sessions(dates) == ["2026-11-26"]
     assert missing_sessions([]) == []
+
+
+def test_legend_starts_collapsed_and_lists_level_values(sa):
+    levels = chart_levels(sa)
+    fig = _fig(sa, levels=levels)
+    assert fig.layout.showlegend is False
+    button = fig.layout.updatemenus[0].buttons[0]
+    assert button.args == ({"showlegend": True},) and button.args2 == ({"showlegend": False},)
+    for lv in levels:
+        line = next(t for t in fig.data if t.legendgroup == lv.id and t.fill is None)
+        assert line.mode == "lines" and not line.text  # no id label at the line's end
+        assert f"{lv.value(sa.last_idx):,.2f}" in line.name

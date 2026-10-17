@@ -95,10 +95,8 @@ def _add_level(fig: go.Figure, sa: SymbolAnalysis, lv: Level, k: float, last: in
                   **PRICE_PANE)
     vals = [float(lv.values[t]) for t in ts]
     fig.add_trace(go.Scatter(
-        x=xs, y=vals, mode="lines+text", name=name, legendgroup=lv.id, hoverinfo="skip",
+        x=xs, y=vals, mode="lines", name=name, legendgroup=lv.id, hoverinfo="skip",
         line={"color": color, "width": 1.5, "dash": "dash"},
-        text=[""] * (len(ts) - 1) + [lv.id], textposition="middle right", textfont={"color": color, "size": 11},
-        cliponaxis=False,
     ), **PRICE_PANE)
 
 
@@ -175,8 +173,14 @@ def price_figure(sa: SymbolAnalysis, levels: list[Level], signal_bars: list[int]
 
     lo, hi = _visible_range(sa, levels, start, last, k)
     fig.update_layout(
-        height=HEIGHT, hovermode="x unified", dragmode="zoom", margin={"l": 56, "r": 64, "t": 36, "b": 8},
+        height=HEIGHT, hovermode="x unified", dragmode="zoom", margin={"l": 56, "r": 16, "t": 36, "b": 8},
+        # the legend starts collapsed; the button expands it (levels with their current values, SMAs, pivots)
+        showlegend=False,
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.01, "xanchor": "left", "x": 0},
+        updatemenus=[{"type": "buttons", "showactive": False, "xanchor": "right", "x": 1, "yanchor": "bottom",
+                      "y": 1.01, "pad": {"r": 0, "t": 0}, "font": {"size": 11},
+                      "buttons": [{"label": "Legend", "method": "relayout",
+                                   "args": [{"showlegend": True}], "args2": [{"showlegend": False}]}]}],
         xaxis_rangeslider_visible=False,
     )
     breaks = [{"bounds": ["sat", "mon"]}]

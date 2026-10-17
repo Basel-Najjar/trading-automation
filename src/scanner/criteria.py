@@ -127,7 +127,7 @@ def _not_extended_rule(strat: Strategy, s: Settings) -> RuleCriterion | None:
 
 def _alignment_rule(strat: Strategy, s: Settings) -> RuleCriterion:
     mode = strat.technical.alignment
-    w = s.scoring.weights.get("flow", 0)
+    w = s.scoring.weights_for(strat).get("flow", 0)
     summary = {
         "soft": f"`soft`: always passes. The flow label is recorded on the candidate and scores the flow component "
                 f"(weight {_fmt(w)}).",
@@ -171,7 +171,11 @@ def _outcome(strat: Strategy, s: Settings) -> list[str]:
                  + (f" (near-miss checks exist for {', '.join(f'`{n}`' for n in nears)})." if nears
                     else "; none of its signals has a near-miss check, so it never reaches the watch list."))
         out.append(watch)
-    out.append(f"Candidates are ranked by score (0–100) across {len(s.scoring.weights)} weighted components.")
+    w = s.scoring.weights_for(strat)
+    own = set(strat.scoring.weights)
+    parts = ", ".join(f"{k} **{_fmt(v)}**" + ("" if k in own else "*") for k, v in w.items())
+    out.append(f"Candidates are ranked by score (0–100), a weighted sum scored for this strategy: {parts}"
+               + (" (* = global weight from settings.yaml)." if set(w) - own else "."))
     return out
 
 

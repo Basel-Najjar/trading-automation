@@ -1,8 +1,10 @@
 """Scoring (§6.8), ranking, watch list (§6.7), alert helper and plan placeholders (§7.4).
 
-Each score component is normalised to 0–1 and multiplied by its weight (weights sum to 100). Defaults
-for the normalisations live in settings.scoring (decision 7); the component table is stored on every
-candidate so the ranking can be challenged.
+Each score component is normalised to 0–1 and multiplied by its weight (weights sum to 100). A score belongs to
+one (symbol, strategy) pair: the signal is scored against the best signal that strategy allows, trend_fit
+measures the strength of the trend state it asked for, room and RSI headroom follow its bias, and the strategy's
+own `scoring.weights` override the global ones. Defaults for the normalisations live in settings.scoring; the
+component table is stored on every candidate so the ranking can be challenged.
 """
 
 from __future__ import annotations
@@ -14,14 +16,17 @@ import numpy as np
 from scanner.levels import confluence_types, project_next
 from scanner.models import (
     AlertPrice,
+    Bars,
     Candidate,
     Level,
     ScoreComponent,
     SignalResult,
     SymbolAnalysis,
+    TrendResult,
     Tri,
     WatchItem,
 )
+from scanner.signals import REGISTRY
 from scanner.strategies import StrategyEval, watch_nears
 
 KIND_ORDER = {"break": 0, "hold": 1, "pattern": 2, "context": 3}
@@ -33,16 +38,93 @@ def _clamp(x: float) -> float:
     return float(min(max(x, 0.0), 1.0)) if not np.isnan(x) else 0.0
 
 
+def _signal_fit(sig: SignalResult | None, strat, sc) -> tuple[float, str]:
+    """Signal kind score relative to the best kind this strategy's own signal rules can produce, so a strategy that
+    only ever fires holds is not ranked below a break strategy for firing its ideal signal."""
+    if sig is None:
+        return 0.0, "no signal rule"
+    kinds = {REGISTRY[n].kind for n in strat.technical.signals_all + strat.technical.signals_any}
+    best = max((sc.signal_kind_scores.get(kd, 0.0) for kd in kinds), default=0.0)
+    got = sc.signal_kind_scores.get(sig.kind, 0.0)
+    raw = got / best if best > 0 else 0.0
+    return _clamp(raw), f"{sig.kind} ({sig.name}); best this strategy allows: {_best_kind(kinds, sc)}"
+
+
+def _best_kind(kinds: set[str], sc) -> str:
+    return max(sorted(kinds), key=lambda kd: sc.signal_kind_scores.get(kd, 0.0), default="—")
+
+
+def _trend_fit(wanted: list[str], trend: TrendResult, b: Bars, t: int, s) -> tuple[float, str]:
+    """How strong the trend state the strategy asked for is: pivot step + SMA stack for up/downtrends, boundary
+    touches + width for ranges. `trend_fit_any` when the strategy accepts any state (or the state is mixed)."""
+    sc = s.scoring
+    state = trend.state
+    if wanted == ["any"] or state not in ("uptrend", "downtrend", "range"):
+        return sc.trend_fit_any, f"{state} vs {wanted}; no strength measure"
+    a = float(b.atr[t])
+    if state == "range":
+        hi, lo = trend.range_high, trend.range_low
+        touches = (hi.touches if hi else 0) + (lo.touches if lo else 0)
+        w0, w1 = sc.range_width_atr
+        width = trend.range_width_atr or 0.0
+        t_part = _clamp(touches / sc.range_touch_cap)
+        w_part = _clamp((width - w0) / (w1 - w0))
+        return (t_part + w_part) / 2, (f"range: {touches} boundary touches ({t_part:.2f}), "
+                                       f"width {width:.1f} ATR ({w_part:.2f})")
+    up = state == "uptrend"
+    sgn = 1.0 if up else -1.0
+    h1, h2, l1, l2 = trend.pivots_used[:4]
+    step = min(sgn * (h2.price - h1.price), sgn * (l2.price - l1.price)) / a if a > 0 else 0.0
+    p_part = _clamp(step / sc.trend_step_atr)
+    j = t - sc.trend_sma_slope_bars
+    m50_then = float(b.sma50[j]) if j >= 0 else float("nan")
+    pairs = ((float(b.close[t]), float(b.sma50[t])), (float(b.sma50[t]), float(b.sma200[t])),
+             (float(b.sma50[t]), m50_then))
+    checks = [sgn * (x - y) > 0 for x, y in pairs if not (np.isnan(x) or np.isnan(y))]  # n/a with short history
+    m_part = sum(checks) / len(checks) if checks else 0.5
+    word = "above" if up else "below"
+    return (p_part + m_part) / 2, (f"{state}: pivot step {step:.2f} ATR ({p_part:.2f}); SMA stack "
+                                   f"{sum(checks)}/{len(checks)} (close {word} SMA50 {word} SMA200, SMA50 "
+                                   f"{'rising' if up else 'falling'}) ({m_part:.2f})")
+
+
+def _room(bias: str, trend: TrendResult, supports: list[dict], resistances: list[dict], k: float,
+          room_atr: float, own: Level | None = None) -> tuple[float, str]:
+    """Space to the next opposing level in the strategy's direction, in ATRs beyond its zone. Neutral strategies
+    want price centred: range position near the middle, or equal distance to support and resistance. The signal's
+    own level is skipped: price inside its zone can sit on either side of the line."""
+    if own is not None:
+        supports = [r for r in supports if r["level"].id != own.id]
+        resistances = [r for r in resistances if r["level"].id != own.id]
+
+    def gap(rows: list[dict]) -> float | None:
+        return max(abs(rows[0]["dist_atr"]) - k, 0.0) if rows and not np.isnan(rows[0]["dist_atr"]) else None
+
+    up, down = gap(resistances), gap(supports)
+    if bias in UP_BIASES or bias in DOWN_BIASES:
+        d, rows, side = (up, resistances, "resistance") if bias in UP_BIASES else (down, supports, "support")
+        if d is None:
+            return 1.0, f"no {side} in the way"
+        return _clamp(d / room_atr), f"{d:.2f} ATR to {rows[0]['level'].label} {side} zone"
+    if trend.state == "range" and trend.range_position is not None:
+        pos = trend.range_position
+        return _clamp(1 - abs(pos - 0.5) * 2), f"range position {pos:.2f} (0.5 = centred)"
+    if up is None or down is None:
+        return 0.5, "only one side has a level"
+    hi = max(up, down)
+    raw = min(up, down) / hi if hi > 0 else 1.0
+    return raw, f"{down:.2f} ATR to support, {up:.2f} ATR to resistance"
+
+
 def _components(sig: SignalResult | None, ev: StrategyEval, sa: SymbolAnalysis, s) -> tuple[list[ScoreComponent], bool]:
-    sc, w = s.scoring, s.scoring.weights
+    sc, w = s.scoring, s.scoring.weights_for(ev.strategy)
     b, t = sa.bars, sa.last_idx
     k = s.levels.zone_atr_mult
     comps: list[tuple[str, float, str]] = []
     stretched = False
     lv: Level | None = sig.level if sig else None
 
-    comps.append(("signal", sc.signal_kind_scores.get(sig.kind, 0.0) if sig else 0.0,
-                  f"{sig.kind} ({sig.name})" if sig else "no signal rule"))
+    comps.append(("signal", *_signal_fit(sig, ev.strategy, sc)))
     if lv is not None:
         rr = _role_reversal(lv, sa)
         lq = lv.quality / sc.level_quality_cap + (sc.role_reversal_bonus if rr else 0.0)
@@ -55,13 +137,12 @@ def _components(sig: SignalResult | None, ev: StrategyEval, sa: SymbolAnalysis, 
     else:
         comps.append(("level_quality", 0.0, "no level"))
         comps.append(("confluence", 0.0, "no level"))
-    trend = ev.strategy.technical.trend
-    comps.append(("trend_fit", sc.trend_fit_any if trend == ["any"] else 1.0,
-                  f"{sa.trend.state} vs {trend}"))
+    bias = ev.strategy.bias
+    comps.append(("trend_fit", *_trend_fit(ev.strategy.technical.trend, sa.trend, b, t, s)))
     comps.append(("flow", sc.flow_scores.get(ev.flow_label, 0.5), ev.flow_label))
+    comps.append(("room", *_room(bias, sa.trend, sa.nearest_support, sa.nearest_resistance, k, sc.room_atr, lv)))
 
     rsi = float(b.rsi[t])
-    bias = ev.strategy.bias
     if bias in UP_BIASES:
         comps.append(("rsi_headroom", _clamp((s.indicators.rsi_overbought - rsi) / sc.rsi_headroom_scale),
                       f"RSI {rsi:.1f} vs {s.indicators.rsi_overbought:g}"))
@@ -69,7 +150,8 @@ def _components(sig: SignalResult | None, ev: StrategyEval, sa: SymbolAnalysis, 
         comps.append(("rsi_headroom", _clamp((rsi - s.indicators.rsi_oversold) / sc.rsi_headroom_scale),
                       f"RSI {rsi:.1f} vs {s.indicators.rsi_oversold:g}"))
     else:
-        comps.append(("rsi_headroom", 0.5, f"RSI {rsi:.1f}; non-directional"))
+        comps.append(("rsi_headroom", _clamp(1 - abs(rsi - 50) / sc.rsi_neutral_scale),
+                      f"RSI {rsi:.1f} vs 50 (neutral: closer is better)"))
 
     a = float(b.atr[t])
     c = float(b.close[t])
