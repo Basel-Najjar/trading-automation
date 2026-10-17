@@ -31,7 +31,8 @@ class DataSettings(_Strict):
     benchmark: str = "SPY"
     min_bars: int = 250
     allow_partial_history: bool = False
-    gap_warn_pct: float = 10.0
+    gap_skip_atr: float = Field(3.0, gt=0)
+    gap_lookback_bars: int = Field(15, ge=1)
     stale_bar_sessions: int = 1
     cache_dir: str = "cache"
     cache_revision_rel_tol: float = 1e-4
@@ -74,7 +75,7 @@ class SignalSettings(_Strict):
     engulfing_tolerance_atr: float = 0.0
     hold_test_lookback: int = 3
     hold_require_prior_side: bool = True
-    break_prior_side_lookback: int = 10
+    break_prior_side_bars: int = Field(3, ge=1, le=20)
     approach_atr: float = 1.0
     approach_lookback_bars: int = 3
     max_signal_age_bars: int = Field(1, ge=0, le=5)

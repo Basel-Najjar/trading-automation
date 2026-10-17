@@ -83,6 +83,24 @@ def test_insufficient_history_and_missing_data(cfg, market_frames):
     assert res.exit_code == 2 and "AAA" in res.analyses
 
 
+def _gap(df: pd.DataFrame, bars_before_d: int, mult: float = 1.15) -> pd.DataFrame:
+    df = df.copy()
+    n = df.index.get_indexer([pd.Timestamp(D)])[0] - bars_before_d
+    df.iloc[n, df.columns.get_loc("open")] = df["close"].iloc[n - 1] * mult
+    return df
+
+
+def test_recent_gap_skips_symbol_older_gap_does_not(cfg, market_frames):
+    frames = dict(market_frames, AAA=_gap(market_frames["AAA"], 3), BBB=_gap(market_frames["BBB"], 30),
+                  XLK=_gap(market_frames["XLK"], 1))
+    res = scan(cfg, frames, D)
+    reasons = dict(res.skipped)
+    assert "recent gap" in reasons["AAA"] and "AAA" not in res.analyses
+    assert "BBB" in res.analyses and "BBB" not in reasons  # gap 30 bars before as-of: fine
+    assert "XLK" in res.context and res.analyses["BBB"].flow.sector != "n/a"  # sector ETF gaps never skip context
+    assert not any("gap" in d.message for d in res.diagnostics)
+
+
 def test_partial_history_allowed(cfg, market_frames):
     cfg.settings = cfg.settings.model_copy(
         update={"data": cfg.settings.data.model_copy(update={"allow_partial_history": True})})

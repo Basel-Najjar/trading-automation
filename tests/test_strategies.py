@@ -92,6 +92,9 @@ def test_pending_propagates_kleene():
     ev = evaluate_strategy(st, "mixed", [sig("resistance_break", Tri.PENDING)], flow(), S)
     assert ev.status is Tri.PENDING
     ev = evaluate_strategy(st, "mixed", [sig("resistance_break", Tri.PENDING), sig("bullish_engulfing")], flow(), S)
+    assert ev.status is Tri.PENDING  # decision B5: engulfing alone does not qualify a bull call spread
+    pmcc = CFG.strategy("pmcc")  # signals_any: [support_hold, bullish_engulfing] → Kleene OR
+    ev = evaluate_strategy(pmcc, "uptrend", [sig("support_hold", Tri.PENDING), sig("bullish_engulfing")], flow(), S)
     assert ev.status is Tri.TRUE
     ev = evaluate_strategy(st, "mixed", [sig("resistance_break"), sig("extended_up", Tri.PENDING)], flow(), S)
     assert ev.status is Tri.PENDING
@@ -102,8 +105,8 @@ def test_trend_any_and_rule_trace():
     ev = evaluate_strategy(st, "downtrend", [], flow(), S)
     rules = {r.rule: r for r in ev.rules}
     assert rules["trend"].status is Tri.TRUE
-    assert rules["signals_any"].status is Tri.FALSE and "not fired" in rules["signals_any"].evidence[0]
-    assert set(rules) == {"trend", "signals_any", "not_extended", "alignment"}
+    assert rules["signals_all"].status is Tri.FALSE and "not fired" in rules["signals_all"].evidence[0]
+    assert set(rules) == {"trend", "signals_all", "not_extended", "alignment"}
 
 
 def test_watch_nears():

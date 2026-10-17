@@ -100,7 +100,10 @@ def test_resistance_hold_positive_and_negative():
 # ---------------------------------------------------------------- breaks
 
 
-BREAK_OK = [ABOVE] * 12 + [(100.6, 101, 100.2, 100.4), (100.7, 100.8, 97.9, 98.0)]
+# 2-bar break (decision B5): N-1 and N both close beyond the zone; N full-bodied and engulfs N-1; the
+# `break_prior_side_bars` (3) closes before N-1 stayed on the level's side.
+FIRST_BELOW = (100.6, 100.8, 99.0, 99.2)  # bar N-1: first close below zone_low 99.5
+BREAK_OK = [ABOVE] * 12 + [FIRST_BELOW, (100.7, 100.8, 97.9, 98.0)]
 
 
 def test_support_break_positive():
@@ -108,6 +111,18 @@ def test_support_break_positive():
     assert len(out) == 1
     _, ev = out[0]
     assert ev["body_ratio"] >= 0.7 and ev["beyond_zone_atr"] == 0.75 and ev["stretched"] is False
+    assert ev["first_close_bar"]["close"] == 99.2 and ev["prior_side_bars"] == 3
+
+
+def test_single_close_beyond_is_not_a_break():
+    rows = [ABOVE] * 12 + [(100.6, 101, 100.2, 100.4), (100.7, 100.8, 97.9, 98.0)]  # N-1 closed inside the zone
+    assert _fire("support_break", rows) == []
+
+
+def test_reclaim_of_level_already_beyond_is_not_a_break():
+    # UBER 2026-10-15 shape: price above resistance, N-1 dips back into the zone, N engulfs back above
+    rows = [BELOW] * 8 + [ABOVE] * 4 + [(101.6, 101.8, 99.6, 99.8), (99.7, 102.0, 99.6, 101.8)]
+    assert _fire("resistance_break", rows, origin="resistance") == []
 
 
 def test_break_without_engulfing_is_no_signal():
@@ -120,31 +135,53 @@ def test_engulfing_but_not_full_bodied_is_no_signal():
     assert _fire("support_break", rows) == []
 
 
-def test_break_requires_close_beyond_zone():
+def test_break_requires_second_close_beyond_zone():
     rows = BREAK_OK[:-1] + [(100.7, 100.8, 99.5, 99.6)]  # closes inside the zone
     assert _fire("support_break", rows) == []
 
 
-def test_break_requires_level_in_play_and_acting_as_support():
-    rows = [ABOVE] * 12 + [(103, 103.5, 102.5, 103), (103.2, 103.3, 97.9, 98.0)]  # N-1 close 103 > zone_high
+def test_break_requires_prior_closes_on_level_side():
+    rows = [ABOVE] * 11 + [BELOW, FIRST_BELOW, BREAK_OK[-1]]  # N-2 already closed below the zone
     assert _fire("support_break", rows) == []
-    rows = [BELOW] * 12 + [(100.6, 101, 100.2, 100.4), (100.7, 100.8, 97.9, 98.0)]  # never closed above
+    rows = [ABOVE] * 8 + [BELOW] + [ABOVE] * 3 + BREAK_OK[-2:]  # the close below is 4 bars before N-1
+    assert len(_fire("support_break", rows)) == 1
+    assert _fire("support_break", rows, settings=_with(break_prior_side_bars=4)) == []
+    rows = [BELOW] * 12 + BREAK_OK[-2:]  # never on the support side
     assert _fire("support_break", rows) == []
 
 
 def test_break_same_colour_engulfing_setting():
-    rows = BREAK_OK[:-2] + [(100.6, 101, 100.2, 100.4), (100.7, 100.8, 97.9, 98.0)]
-    rows[-2] = (100.6, 101, 100.2, 100.45)  # N-1 bearish too: same colour
-    assert len(_fire("support_break", rows)) == 1  # spec default allows same colour
-    assert _fire("support_break", rows, settings=_with(break_engulfing_require_opposite_color=True)) == []
+    assert BREAK_OK[-2][3] < BREAK_OK[-2][0]  # N-1 bearish, N bearish: same colour
+    assert len(_fire("support_break", BREAK_OK)) == 1  # spec default allows same colour
+    assert _fire("support_break", BREAK_OK, settings=_with(break_engulfing_require_opposite_color=True)) == []
+
+
+RES_BREAK = [BELOW] * 12 + [(99.6, 100.9, 99.4, 100.7), (99.5, 102.2, 99.4, 102.0)]
 
 
 def test_resistance_break_positive_and_stretched():
-    rows = [BELOW] * 12 + [(99.4, 99.8, 99.2, 99.6), (99.3, 102.2, 99.2, 102.0)]
-    out = _fire("resistance_break", rows, origin="resistance")
+    out = _fire("resistance_break", RES_BREAK, origin="resistance")
     assert len(out) == 1 and out[0][1]["stretched"] is False
-    rows[-1] = (99.3, 104.2, 99.2, 104.0)
+    rows = RES_BREAK[:-1] + [(99.5, 104.2, 99.4, 104.0)]
     assert _fire("resistance_break", rows, origin="resistance")[0][1]["stretched"] is True  # 1.75 ATR > 1.5
+
+
+def test_break_suppresses_opposite_hold_on_same_level():
+    # bar N dips into the zone, prior close above it, closes above N-1's high: shaped like a support hold,
+    # but the level was resistance until the 2-bar break, so only the break is reported
+    assert len(_fire("resistance_break", RES_BREAK, origin="resistance")) == 1
+    assert _fire("support_hold", RES_BREAK, origin="resistance") == []
+
+
+def test_near_break_first_close_and_in_zone():
+    b = bars_from_ohlc([ABOVE] * 12 + [FIRST_BELOW])
+    near = near_signals(tech_for(b, [hlevel(100.0, len(b))]), len(b) - 1, S)["support_break"][0]
+    assert near.distance_atr == 0.0 and "first close below" in near.description
+    b = bars_from_ohlc([ABOVE] * 12 + [(101, 101.5, 100.6, 101), (100.8, 101, 100.0, 100.2)])
+    near = near_signals(tech_for(b, [hlevel(100.0, len(b))]), len(b) - 1, S)["support_break"][0]
+    assert "no break yet" in near.description and near.triggers[0].price == 99.5
+    b = bars_from_ohlc(BREAK_OK)  # fired → not a near-miss
+    assert near_signals(tech_for(b, [hlevel(100.0, len(b))]), len(b) - 1, S).get("support_break", []) == []
 
 
 # ---------------------------------------------------------------- patterns

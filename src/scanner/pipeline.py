@@ -18,7 +18,7 @@ import pandas as pd
 
 from scanner import sessions
 from scanner.config import Config, Settings
-from scanner.data import ParquetCache, PriceProvider, YFinanceProvider, ensure_data, quality_checks
+from scanner.data import ParquetCache, PriceProvider, YFinanceProvider, ensure_data, quality_checks, recent_gaps
 from scanner.flow import period_returns, ratio_trend, state_of
 from scanner.indicators import compute_bars, find_pivots
 from scanner.levels import build_levels, confluence_zones, nearest_levels
@@ -188,8 +188,16 @@ def scan(
         if quality:
             # with a forming bar for as_of, completed data is current if it reaches the prior session
             ref = sessions.sessions_back(as_of, 1) if prov is not None else as_of
-            diags += quality_checks(sym, win, ref, s.data.gap_warn_pct, s.data.stale_bar_sessions,
-                                    s.report.chart_bars)
+            diags += quality_checks(sym, win, ref, s.data.stale_bar_sessions, s.report.chart_bars)
+        gaps = recent_gaps(win if prov is None else pd.concat([win, prov]), s.indicators.atr_period,
+                           s.data.gap_skip_atr, s.data.gap_lookback_bars)
+        if gaps and in_universe:
+            d, g_atr, g_pct = gaps[-1]
+            skipped.append((sym, f"recent gap: {d.isoformat()} opened {g_atr:.1f} ATR ({g_pct:.1f}%) from the prior "
+                                 f"close (> {s.data.gap_skip_atr:g} ATR within {s.data.gap_lookback_bars} bars)"))
+            if sym not in (bench, *sector_etfs):
+                continue
+            in_universe = False  # still needed as benchmark/sector context for flow
         windows[sym] = win
         fingerprints[sym] = _fingerprint(win)
         try:

@@ -9,7 +9,7 @@
   bias: bullish
   technical:
     trend: [any]
-    signals_any: [resistance_break, bullish_engulfing]
+    signals_all: [resistance_break]   # decision B5: 2-bar break required; engulfing alone does not qualify
     not_extended: auto            # bullish → not extended up (RSI < 70)
     alignment: soft
   construction:
@@ -37,7 +37,7 @@
   bias: bearish
   technical:
     trend: [any]
-    signals_any: [support_break, bearish_engulfing]
+    signals_all: [support_break]      # decision B5: 2-bar break required; engulfing alone does not qualify
     not_extended: auto            # bearish → not extended down (RSI > 30)
     alignment: soft
   construction:

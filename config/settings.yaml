@@ -4,59 +4,60 @@
 
 data:
   history_years: 3
-  price_adjustment: split_only        # split_only | total_return
+  price_adjustment: split_only # split_only | total_return
   benchmark: SPY
-  min_bars: 250                       # [added] skip symbols with fewer completed bars (DS-9)
-  allow_partial_history: false        # [added] analyse short histories; SMA200 logic becomes n/a
-  gap_warn_pct: 10.0                  # [added] flag single-bar open gaps larger than this %
-  stale_bar_sessions: 1               # [added] warn if last bar is more than this many sessions old
-  cache_dir: cache                    # [added]
-  cache_revision_rel_tol: 0.0001      # [added] relative tolerance for split/revision detection (DS-7)
-  close_buffer_minutes: 30            # [added] bars are provisional until close + this buffer (US/Eastern)
-  batch_size: 40                      # [added] tickers per yfinance request
-  max_retries: 3                      # [added]
+  min_bars: 250 # [added] skip symbols with fewer completed bars (DS-9)
+  allow_partial_history: false # [added] analyse short histories; SMA200 logic becomes n/a
+  gap_skip_atr: 3.0 # [added] skip a symbol whose open gapped more than this many ATRs …
+  gap_lookback_bars: 15 # [added] … within this many recent bars (~3 weeks); older gaps are fine
+  stale_bar_sessions: 1 # [added] warn if last bar is more than this many sessions old
+  cache_dir: cache # [added]
+  cache_revision_rel_tol: 0.0001 # [added] relative tolerance for split/revision detection (DS-7)
+  close_buffer_minutes: 30 # [added] bars are provisional until close + this buffer (US/Eastern)
+  batch_size: 40 # [added] tickers per yfinance request
+  max_retries: 3 # [added]
 
 indicators:
   atr_period: 14
   rsi_period: 14
   rsi_overbought: 70
   rsi_oversold: 30
-  relvol_period: 20                   # [added] informational relative volume
+  relvol_period: 20 # [added] informational relative volume
 
 pivots:
   pivot_window: 5
 
 levels:
-  zone_atr_mult: 0.25                 # zone half-width in ATRs
+  zone_atr_mult: 0.25 # zone half-width in ATRs
   cluster_atr_mult: 0.5
   min_touches_horizontal: 2
   min_touches_diagonal: 2
   trendline_lookback_bars: 250
-  trendline_scale: linear             # linear | log
+  trendline_scale: linear # linear | log
   nearest_levels_per_side: 3
-  horizontal_lookback_bars: null      # [added] null = whole analysis window
-  recency_half_life_bars: 60          # [added] quality = touches × 0.5^(bars since last touch / half-life)
-  max_trendlines_per_side: 2          # [added] spec default "top 2"
-  sma_base_quality: {sma50: 2.0, sma200: 3.0}   # [added] SMAs have no touches; fixed quality
-  manual_quality: 3.0                 # [added]
+  horizontal_lookback_bars: null # [added] null = whole analysis window
+  recency_half_life_bars: 60 # [added] quality = touches × 0.5^(bars since last touch / half-life)
+  max_trendlines_per_side: 2 # [added] spec default "top 2"
+  sma_base_quality: { sma50: 2.0, sma200: 3.0 } # [added] SMAs have no touches; fixed quality
+  manual_quality: 3.0 # [added]
 
 signals:
   full_body_ratio: 0.70
-  break_engulfing_require_opposite_color: false    # breaks (spec OQ-1 default)
-  pattern_engulfing_require_opposite_color: true   # [added, decision B3] standalone engulfing patterns
-  engulfing_tolerance_atr: 0.0        # [added] body-containment slack, in ATRs
+  break_engulfing_require_opposite_color: false # breaks (spec OQ-1 default)
+  pattern_engulfing_require_opposite_color: true # [added, decision B3] standalone engulfing patterns
+  engulfing_tolerance_atr: 0.0 # [added] body-containment slack, in ATRs
   hold_test_lookback: 3
-  hold_require_prior_side: true       # [added, decision B4] test bar must come from the support/resistance side
-  break_prior_side_lookback: 10
+  hold_require_prior_side: true # [added, decision B4] test bar must come from the support/resistance side
+  break_prior_side_bars: 3 # [decision B5] closes before a 2-bar break that must stay on the level's side
   approach_atr: 1.0
-  approach_lookback_bars: 3           # [added] "moving toward": closer to the level than this many bars ago
+  approach_lookback_bars: 3 # [added] "moving toward": closer to the level than this many bars ago
   max_signal_age_bars: 1
   chase_atr: 1.5
 
 range:
   mid_band: [0.35, 0.65]
 
-flow:                                 # [added, decision B2] which trend states agree/oppose each bias
+flow: # [added, decision B2] which trend states agree/oppose each bias
   agree:
     bullish: [uptrend]
     non_bearish: [uptrend, range]
@@ -71,21 +72,31 @@ flow:                                 # [added, decision B2] which trend states 
     neutral: [uptrend, downtrend]
 
 scoring:
-  weights: {signal: 30, level_quality: 20, confluence: 10, trend_fit: 10, flow: 15, rsi_headroom: 5, entry_quality: 5, age: 5}
-  signal_kind_scores: {break: 1.0, hold: 0.75, pattern: 0.5, context: 0.2}   # [added]
-  level_quality_cap: 6.0              # [added] quality at/above this scores 1.0
-  role_reversal_bonus: 0.1            # [added] added to the 0–1 level-quality score for role-reversal levels
-  rsi_headroom_scale: 30.0            # [added] RSI points of headroom that score 1.0
-  trend_fit_any: 0.5                  # [added] trend_fit for strategies with trend [any]
-  flow_scores: {with_flow: 1.0, mixed: 0.5, countertrend: 0.0, ignored: 0.5}   # [added]
-  age_scores: [1.0, 0.5]              # [added] by signal age
+  weights:
+    {
+      signal: 30,
+      level_quality: 20,
+      confluence: 10,
+      trend_fit: 10,
+      flow: 15,
+      rsi_headroom: 5,
+      entry_quality: 5,
+      age: 5,
+    }
+  signal_kind_scores: { break: 1.0, hold: 0.75, pattern: 0.5, context: 0.2 } # [added]
+  level_quality_cap: 6.0 # [added] quality at/above this scores 1.0
+  role_reversal_bonus: 0.1 # [added] added to the 0–1 level-quality score for role-reversal levels
+  rsi_headroom_scale: 30.0 # [added] RSI points of headroom that score 1.0
+  trend_fit_any: 0.5 # [added] trend_fit for strategies with trend [any]
+  flow_scores: { with_flow: 1.0, mixed: 0.5, countertrend: 0.0, ignored: 0.5 } # [added]
+  age_scores: [1.0, 0.5] # [added] by signal age
 
 report:
   max_watch_items: 30
-  max_watch_items_per_symbol: 3       # [added] spec WL-3 default
+  max_watch_items_per_symbol: 3 # [added] spec WL-3 default
   chart_bars: 150
-  timezone: America/Chicago           # [added] run timestamps (NF-9)
-  reports_dir: reports                # [added]
+  timezone: America/Chicago # [added] run timestamps (NF-9)
+  reports_dir: reports # [added]
 
 replay:
-  forward_horizons: [3, 5, 10, 20]    # [added] RP-4
+  forward_horizons: [3, 5, 10, 20] # [added] RP-4

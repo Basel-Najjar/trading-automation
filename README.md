@@ -52,9 +52,16 @@ scanner cache info | scanner cache refresh
 uv run streamlit run src/scanner/app.py      # run from the repository root
 ```
 
-- **Sidebar.** Pick a date (default today), and optionally strategies, deep-dive symbols and a forced refresh. Then
-  press **Run analysis**. The app shows the same HTML report as `scanner run`, and **Export report** downloads it.
-  The app does not write to `reports/`.
+- **Sidebar.** Pick a date (default today) and optionally force a data refresh, then press **Run analysis**. Every run
+  scans all enabled symbols and all active strategies. All filtering happens after the scan.
+- **Top symbols.** Cards rank symbols by their best strategy's share of rules met. PENDING_CLOSE rules count as not
+  met. Ties go to the best candidate score. A slider sets the number of cards (default 10).
+- **Strategies and details.** Click **View** on a card to list that symbol's strategies, sorted by % of rules met.
+  Click a strategy row to see its details: rule evidence, chart, alert prices, nearest levels, score breakdown, plan
+  and checklists.
+- **Deep dive.** Pick symbols and/or strategies to filter the full HTML report. Picked symbols show every picked
+  strategy, including rules that did not match. **Export report** downloads the report as shown. The app does not
+  write to `reports/`.
 - **Config tab.** Edit symbols, type, enabled, notes, sector ETF and the benchmark. **Save config** validates the
   edit first and writes nothing if there are errors. It then rewrites `universe.csv` and `sector_map.csv` and the
   `benchmark:` line in `settings.yaml`. The editor needs `universe.csv`, not `universe.txt`.
@@ -152,6 +159,13 @@ The spec's stated defaults are implemented as written unless listed here. Everyt
   and `bearish_engulfing` patterns require opposite colours (`pattern_engulfing_require_opposite_color: true`).
 - **B4, hold direction.** The hold test bar must come from the level's side: the previous close is ≥ `zone_low` for
   support holds and ≤ `zone_high` for resistance holds.
+- **B5, 2-bar break (OQ-1, 2026-10-16).**
+  - **The break.** Bars N-1 and N both close beyond the zone. Bar N is full-bodied and engulfs N-1. The
+    `break_prior_side_bars` (3) closes before N-1 stayed on the level's side, so reclaiming a level price was
+    already beyond is not a break.
+  - **No double report.** A level that breaks is not also reported as an opposite-role hold on the same bar.
+  - **Strategies.** Bull Call Spread and Bear Put Spread require the break (`signals_all`). A standalone engulfing
+    no longer qualifies them.
 - **Per-strategy overrides** are limited to `signals:` keys and the RSI thresholds.
 - **Scoring normalisations** use the defaults listed in [docs/signals.md](docs/signals.md#score-0100), to be tuned
   with replay.
@@ -181,7 +195,10 @@ The spec's stated defaults are implemented as written unless listed here. Everyt
 - Benchmark failure does not abort the run: flow components become `n/a` and the run exits with code 2.
 - Both `universe.csv` and `universe.txt` present is an error. `expected_reads.csv` separates multiple items with `;`.
 - `run --symbol` and `--strategy` write `scan_<SYMBOL>.html` and `scan_strategy_<id>.html` so the full report is not overwritten.
-- Data-quality volume/gap checks cover the charted period (`chart_bars`); missing-bar checks cover the whole window.
+- Data-quality volume checks cover the charted period (`chart_bars`); missing-bar checks cover the whole window.
+- **Recent gaps (owner, 2026-10-16).** A symbol is skipped if any open in the last `gap_lookback_bars` (15,
+  about 3 weeks) gapped more than `gap_skip_atr` (3) × ATR from the prior close. ATR is measured as of the prior
+  bar. Older gaps are ignored. A gapped benchmark or sector ETF still feeds flow.
 
 **Price basis (DS-3).** `price_adjustment: split_only` uses yfinance `auto_adjust=False` OHLC. This was verified
 to be split-adjusted (NVDA before its June 2024 10:1 split shows ≈ $120, not ≈ $1,200) and not dividend-adjusted
@@ -196,7 +213,6 @@ Residual differences against TradingView:
 
 ## Open items for the owner
 
-- **OQ-1, break definition:** confirm via `check-reads` and replay (conditions 4–5 are configurable).
 - **OQ-2 to OQ-5, parameters:** tune `zone_atr_mult`, `pivot_window`, the range tolerance and trendline settings
   against your chart reads.
 - **OQ-9/OQ-10, seeded technical rules:** these were inferred from the playbook; edit freely.

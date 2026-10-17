@@ -276,11 +276,11 @@ def ensure_data(
     return result
 
 
-def quality_checks(symbol: str, df: pd.DataFrame, as_of: date, gap_warn_pct: float,
-                   stale_bar_sessions: int, recent_bars: int = 150) -> list[Diagnostic]:
+def quality_checks(symbol: str, df: pd.DataFrame, as_of: date, stale_bar_sessions: int,
+                   recent_bars: int = 150) -> list[Diagnostic]:
     """DS-10 checks on the analysis window (completed bars ≤ as_of).
 
-    Missing bars are checked over the whole window; volume and gap checks over the last `recent_bars`
+    Missing bars are checked over the whole window; volume over the last `recent_bars`
     (the charted period), so years-old events do not flag every run.
     """
     out: list[Diagnostic] = []
@@ -302,9 +302,27 @@ def quality_checks(symbol: str, df: pd.DataFrame, as_of: date, gap_warn_pct: flo
     bad_vol = int((vol.isna() | (vol <= 0)).sum())
     if bad_vol:
         out.append(Diagnostic(symbol, "quality", "warning", f"{bad_vol} bar(s) with zero/NaN volume"))
-    gap = ((recent["open"] / recent["close"].shift(1) - 1).abs() * 100).iloc[1:]
-    big = gap[gap > gap_warn_pct]
-    if len(big):
-        sample = ", ".join(f"{d.date().isoformat()} ({g:.1f}%)" for d, g in big.tail(5).items())
-        out.append(Diagnostic(symbol, "quality", "warning", f"{len(big)} gap(s) > {gap_warn_pct:g}%: {sample}"))
+    return out
+
+
+def recent_gaps(df: pd.DataFrame, atr_period: int, max_atr: float, lookback: int) -> list[tuple[date, float, float]]:
+    """Open gaps larger than `max_atr` × ATR within the last `lookback` bars, as (date, gap in ATRs, gap %).
+
+    The gap on bar t is |open_t − close_{t−1}|, measured against ATR as of bar t−1 so the gap does not inflate its
+    own yardstick. Older gaps are ignored (they are history, not a distorted current structure).
+    """
+    from scanner.indicators import atr_wilder
+
+    if len(df) < 2:
+        return []
+    o, h, lo, c = (df[x].to_numpy(dtype=float) for x in ("open", "high", "low", "close"))
+    atr = atr_wilder(h, lo, c, atr_period)
+    out = []
+    for t in range(max(1, len(df) - lookback), len(df)):
+        a = atr[t - 1]
+        if np.isnan(a) or a <= 0:
+            continue
+        g = abs(o[t] - c[t - 1])
+        if g / a > max_atr:
+            out.append((df.index[t].date(), float(g / a), float(g / c[t - 1] * 100)))
     return out

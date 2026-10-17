@@ -73,7 +73,7 @@ The scanner is the **discovery layer only**. The owner takes the ranked shortlis
 ### 3.3 History depth and data quality
 
 - DS-9. Default history: **3 years** (setting). Minimum bars required: 250 (SMA200 + pivot warm-up). Symbols with insufficient history are skipped with a visible reason (or SMA200-dependent logic marked `n/a` if a setting allows partial analysis).
-- DS-10. Data-quality checks per symbol, reported in the run summary: missing bars vs. the trading calendar, stale last bar, zero/NaN volume, extreme single-bar gaps (> configurable %, flagged for owner awareness, not auto-excluded).
+- DS-10. Data-quality checks per symbol, reported in the run summary: missing bars vs. the trading calendar, stale last bar, zero/NaN volume. Recent extreme gaps: a symbol whose open gapped more than `gap_skip_atr` (default 3) × ATR from the prior close within the last `gap_lookback_bars` (default 15, ~3 weeks) is **skipped** with the gap as the reason; older gaps are ignored. Benchmark/sector ETFs still feed flow. (Revised 2026-10-16 by the owner; previously a >10% warning only.)
 - DS-11. **Timing:** default expectation is an **end-of-day run after the close** on completed bars. If the last bar is still forming (run during market hours), mark it `provisional`, and mark every signal that depends on it `PENDING_CLOSE` instead of true/false.
 - DS-12. Use a US equity trading calendar for "latest completed bar" and replay date logic.
 
@@ -208,18 +208,18 @@ Each signal returns `true | false | PENDING_CLOSE` and, when true, the evidence:
 - `support_hold`: for a support level L, within the last `hold_test_lookback` bars (default 3, including bar N-1 and N), a bar's **low entered the zone** (`low ≤ zone_high`) **and closed back at or above `zone_low`**; and bar N **closes above bar N-1's high**.
 - `resistance_hold`: mirror — a bar's high entered the zone (`high ≥ zone_low`) and closed at or below `zone_high`; bar N **closes below bar N-1's low**.
 
-**Break signals (engulfing confirmation)**
+**Break signals (2-bar break with engulfing confirmation)**
 
-The owner's rule: *an engulfing candle is required for a break of support or resistance, and the second bar must be full-bodied.* Bar N is the "second bar".
+The owner's rule: *a break is a 2-bar close beyond the level; an engulfing candle is required and the second bar must be full-bodied.* Bar N-1 is the first close beyond the zone; bar N is the "second bar". (Revised 2026-10-16, decision B5; the original single-bar definition fired on reclaims of levels price was already beyond.)
 
 - `support_break` for support level L, all of:
-  1. Bar N **closes below `zone_low`**.
-  2. Bar N is a **full-bodied bearish** bar.
-  3. Bar N **engulfs** bar N-1 (body).
-  4. Bar N-1's close is within or beyond the zone on the breaking side (`close_{N-1} ≤ zone_high`) — the level was "in play".
-  5. The level was acting as support: at least one close above `zone_high` in the prior `break_prior_side_lookback` bars (default 10).
-- `resistance_break`: mirror (bar N closes above `zone_high`, full-bodied bullish, engulfs N-1, `close_{N-1} ≥ zone_low`, prior closes below `zone_low` within the lookback).
-- Conditions 4–5 are the agent's interpretation of the owner's rule and are configurable; see OQ-1.
+  1. Bar N-1 **closes below `zone_low`** (first close).
+  2. Bar N **closes below `zone_low`** (second close).
+  3. Bar N is a **full-bodied bearish** bar.
+  4. Bar N **engulfs** bar N-1 (body).
+  5. Price came from the support side: each of the `break_prior_side_bars` (default 3) closes before bar N-1 was ≥ `zone_low`.
+- `resistance_break`: mirror (N-1 and N close above `zone_high`, N full-bodied bullish and engulfs N-1, the `break_prior_side_bars` closes before N-1 all ≤ `zone_high`).
+- A level that breaks on a bar is not also reported as a hold of the opposite role on that bar.
 
 **Pattern signals**
 
@@ -311,7 +311,7 @@ signals:
   full_body_ratio: 0.70
   engulfing_require_opposite_color: false
   hold_test_lookback: 3
-  break_prior_side_lookback: 10
+  break_prior_side_bars: 3
   approach_atr: 1.0
   max_signal_age_bars: 1
   chase_atr: 1.5
@@ -537,7 +537,7 @@ scanner cache refresh|info
 
 | ID | Item | Assumed default |
 |---|---|---|
-| **OQ-1** | **Break definition.** Owner: "engulfing candle required for a break; the second bar must be full bodied." A bar that closes through support is usually bearish, and a classic bearish engulfing follows a *bullish* bar. | Bar N = the "second bar": closes beyond the zone, full-bodied, and its body engulfs bar N-1's body; same-color engulfing allowed; bar N-1 was in/through the zone; level acted as support/resistance in the prior 10 bars. **Owner to confirm via replay.** |
+| **OQ-1** | **Break definition.** Owner: "engulfing candle required for a break; the second bar must be full bodied." A bar that closes through support is usually bearish, and a classic bearish engulfing follows a *bullish* bar. | **Decided 2026-10-16 (B5):** 2-bar break — N-1 and N both close beyond the zone; N full-bodied and engulfs N-1 (same colour allowed); the 3 closes before N-1 on the level's side. See §6.4. |
 | **OQ-2** | **Zone width.** "Use ATR to determine the zone." | Zone = level ± 0.25 × ATR(14). Tune with replay. |
 | **OQ-3** | **Pivot window.** Not specified. | 5 bars each side (lagging confirmation); likely tuned to 3–5. |
 | **OQ-4** | **Range definition.** Not specified. | ≥ 2 pivot highs and ≥ 2 pivot lows clustered within 0.5 ATR; price between; middle band for neutral calendars. |
@@ -566,7 +566,7 @@ Seeded from the owner's playbook. Display-only text is transcribed from the play
   bias: bullish
   technical:
     trend: [any]
-    signals_any: [resistance_break, bullish_engulfing]
+    signals_all: [resistance_break]
     not_extended: auto            # bullish → not extended up (RSI < 70)
     alignment: soft
   construction:
@@ -594,7 +594,7 @@ Seeded from the owner's playbook. Display-only text is transcribed from the play
   bias: bearish
   technical:
     trend: [any]
-    signals_any: [support_break, bearish_engulfing]
+    signals_all: [support_break]
     not_extended: auto            # bearish → not extended down (RSI > 30)
     alignment: soft
   construction:

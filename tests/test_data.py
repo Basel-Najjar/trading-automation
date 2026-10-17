@@ -9,7 +9,7 @@ import pytest
 
 from conftest import FakeProvider, random_frame
 from scanner import sessions
-from scanner.data import ParquetCache, ensure_data, normalize_frame, quality_checks
+from scanner.data import ParquetCache, ensure_data, normalize_frame, quality_checks, recent_gaps
 
 ET = sessions.ET
 AFTER_CLOSE = datetime(2026, 9, 30, 17, 0, tzinfo=ET)
@@ -106,10 +106,23 @@ def test_quality_checks():
     df = random_frame(300, seed=3)
     df = df.drop(df.index[150])  # missing bar
     df.iloc[-5, df.columns.get_loc("volume")] = 0
-    df.iloc[-3, df.columns.get_loc("open")] = df["close"].iloc[-4] * 1.2  # 20% gap
-    msgs = [d.message for d in quality_checks("AAA", df, date(2026, 10, 2), 10.0, 1)]
+    df.iloc[-3, df.columns.get_loc("open")] = df["close"].iloc[-4] * 1.2  # 20% gap: not a quality warning any more
+    msgs = [d.message for d in quality_checks("AAA", df, date(2026, 10, 2), 1)]
     assert any("1 missing bar" in m for m in msgs)
     assert any("zero/NaN volume" in m for m in msgs)
-    assert any("gap(s) > 10%" in m for m in msgs)
+    assert not any("gap" in m for m in msgs)
     assert any("stale data" in m for m in msgs)  # last bar 9/30, as-of 10/2
-    assert quality_checks("AAA", random_frame(300, seed=4), date(2026, 9, 30), 10.0, 1) == []
+    assert quality_checks("AAA", random_frame(300, seed=4), date(2026, 9, 30), 1) == []
+
+
+def test_recent_gaps_atr_multiple_and_lookback():
+    df = random_frame(300, seed=3)
+    assert recent_gaps(df, 14, 3.0, 15) == []
+    old, new = df.copy(), df.copy()
+    old.iloc[-20, old.columns.get_loc("open")] = old["close"].iloc[-21] * 1.2  # 20 bars ago: outside 15
+    assert recent_gaps(old, 14, 3.0, 15) == []
+    assert len(recent_gaps(old, 14, 3.0, 25)) == 1
+    new.iloc[-5, new.columns.get_loc("open")] = new["close"].iloc[-6] * 1.08
+    (d, g_atr, g_pct), = recent_gaps(new, 14, 3.0, 15)
+    assert d == new.index[-5].date() and abs(g_pct - 8.0) < 1e-9 and g_atr > 3.0
+    assert recent_gaps(new, 14, g_atr + 0.1, 15) == []  # threshold is in ATRs, not percent

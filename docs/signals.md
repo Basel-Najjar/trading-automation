@@ -62,32 +62,37 @@ Parameters: `hold_test_lookback`, `hold_require_prior_side`, `zone_atr_mult`.
 Mirror of `support_hold`. A bar's high entered the zone (`high ≥ zone_low`) and closed ≤ `zone_high`, and the
 previous close was ≤ `zone_high`. Bar N **closes below bar N-1's low**.
 
-## Break signals (engulfing confirmation, OQ-1)
+## Break signals (2-bar break with engulfing confirmation, OQ-1, decision B5)
 
-The owner's rule: *an engulfing candle is required for a break, and the second bar must be full-bodied*. Bar N is
-the second bar.
+The owner's rule: *a break is a 2-bar close beyond the level. An engulfing candle is required, and the second bar
+must be full-bodied.* Bar N-1 is the first close beyond the zone. Bar N is the second, confirming bar.
 
 ### `support_break`
 For any level L, all of the following hold:
-1. Bar N **closes below `zone_low`**.
-2. Bar N is a **full-bodied bearish** bar.
-3. Bar N's body **engulfs** bar N-1's body.
-4. Bar N-1 closed ≤ `zone_high` (the level was "in play").
-5. The level acted as support: at least one close above `zone_high` in the prior `break_prior_side_lookback`
-   bars (default 10).
+1. Bar N-1 **closes below `zone_low`**.
+2. Bar N **closes below `zone_low`**.
+3. Bar N is a **full-bodied bearish** bar.
+4. Bar N's body **engulfs** bar N-1's body.
+5. Price came from the support side: each of the `break_prior_side_bars` (default 3) closes before bar N-1 was
+   ≥ `zone_low`. So a reclaim of a level that price had already broken is not a break.
 
-Evidence includes `beyond_zone_atr`, how far the close is beyond the zone. It is flagged `stretched` when that
-exceeds `chase_atr` (1.5).
+A level that breaks on a bar is not reported as a hold of the opposite role on the same bar. For example, a
+resistance break is never also reported as a `support_hold` on that level.
+
+Evidence includes `first_close_bar` (bar N-1) and `beyond_zone_atr`, how far bar N's close is beyond the zone. It is
+flagged `stretched` when that exceeds `chase_atr` (1.5).
 Parameters: `full_body_ratio`, `break_engulfing_require_opposite_color`, `engulfing_tolerance_atr`,
-`break_prior_side_lookback`, `chase_atr`.
+`break_prior_side_bars`, `chase_atr`.
+
+**Watch list (near):**
+- price is inside the zone, and the prior closes are on the level's side;
+- or bar N is the first close beyond the zone, and the second close is still needed.
 
 ### `resistance_break`
 Mirror image of `support_break`:
-- Bar N closes above `zone_high`.
-- It is a full-bodied bullish bar.
-- Its body engulfs bar N-1's body.
-- Bar N-1 closed ≥ `zone_low`.
-- There was at least one close below `zone_low` within the lookback.
+- Bars N-1 and N both close above `zone_high`.
+- Bar N is a full-bodied bullish bar, and its body engulfs bar N-1's body.
+- The `break_prior_side_bars` closes before N-1 were all ≤ `zone_high`.
 
 ## Pattern signals
 

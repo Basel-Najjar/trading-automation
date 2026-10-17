@@ -148,8 +148,11 @@ def _hold(tech: Tech, i: int, s, side: str) -> list[Firing]:
     confirmed = b.close[i] > b.high[i - 1] if side == "support" else b.close[i] < b.low[i - 1]
     if not confirmed:
         return []
+    broken = {lv.id for lv, _ in _break(tech, i, s, "resistance" if side == "support" else "support")}
     out = []
     for lv in tech.levels:
+        if lv.id in broken:  # decision B5: the bar broke this level from the other side; it is a break, not a hold
+            continue
         t = _hold_test(tech, lv, i, s, side, i)
         if t is None:
             continue
@@ -238,34 +241,38 @@ def resistance_hold_near(tech: Tech, i: int, s) -> list[NearResult]:
 
 
 # ----------------------------------------------------------------------------------------------
-# Break signals (engulfing + full-bodied confirmation, OQ-1)
+# Break signals (2-bar close beyond the zone + engulfing, full-bodied confirmation; OQ-1, decision B5)
 # ----------------------------------------------------------------------------------------------
+
+
+def _beyond(lv: Level, b: Bars, t: int, k: float, side: str) -> bool:
+    """Bar t closed beyond the zone on the breaking side (below zone_low for support, above zone_high otherwise)."""
+    lo, hi = lv.zone(t, b.atr, k)
+    return bool(b.close[t] < lo) if side == "support" else bool(b.close[t] > hi)
+
+
+def _prior_side_ok(lv: Level, b: Bars, end: int, k: float, n: int, side: str) -> bool:
+    """Each of the `n` closes ending at bar `end` stayed on the level's side (none beyond the zone)."""
+    ts = range(end - n + 1, end + 1)
+    if end - n + 1 < 0 or not all(_valid(lv, t) and not np.isnan(b.atr[t]) for t in ts):
+        return False
+    return not any(_beyond(lv, b, t, k, side) for t in ts)
 
 
 def _break_conditions(tech: Tech, lv: Level, i: int, s, side: str) -> dict | None:
     b, k, sig = tech.bars, s.levels.zone_atr_mult, s.signals
-    lb = sig.break_prior_side_lookback
     if i < 1 or not _valid(lv, i, i - 1) or np.isnan(b.atr[i]) or np.isnan(b.atr[i - 1]):
         return None
     lo, hi = lv.zone(i, b.atr, k)
-    plo, phi = lv.zone(i - 1, b.atr, k)
-    prior = range(max(i - lb, 1), i)
-    if side == "support":
-        c1 = b.close[i] < lo
-        c2 = is_full_body(b, i, sig.full_body_ratio) and is_bear(b, i)
-        c4 = b.close[i - 1] <= phi
-        c5 = any(_valid(lv, t) and b.close[t] > lv.zone(t, b.atr, k)[1] for t in prior)
-        beyond = (lo - b.close[i]) / b.atr[i]
-    else:
-        c1 = b.close[i] > hi
-        c2 = is_full_body(b, i, sig.full_body_ratio) and is_bull(b, i)
-        c4 = b.close[i - 1] >= plo
-        c5 = any(_valid(lv, t) and b.close[t] < lv.zone(t, b.atr, k)[0] for t in prior)
-        beyond = (b.close[i] - hi) / b.atr[i]
-    c3 = engulfs(b, i, _eng_tol(b, i, s), sig.break_engulfing_require_opposite_color)
-    return {"closes_beyond_zone": bool(c1), "full_bodied": bool(c2), "engulfs_prior": bool(c3),
-            "prior_close_in_play": bool(c4), "acted_as_level": bool(c5), "beyond_atr": float(beyond),
-            "in_zone": bool(lo <= b.close[i] <= hi)}
+    full = is_full_body(b, i, sig.full_body_ratio) and (is_bear(b, i) if side == "support" else is_bull(b, i))
+    beyond = (lo - b.close[i]) / b.atr[i] if side == "support" else (b.close[i] - hi) / b.atr[i]
+    n = sig.break_prior_side_bars
+    return {"closes_beyond_zone": _beyond(lv, b, i, k, side),
+            "prior_closes_beyond_zone": _beyond(lv, b, i - 1, k, side), "full_bodied": bool(full),
+            "engulfs_prior": engulfs(b, i, _eng_tol(b, i, s), sig.break_engulfing_require_opposite_color),
+            "prior_side": _prior_side_ok(lv, b, i - 2, k, n, side),          # before the 2-bar break
+            "prior_side_next": _prior_side_ok(lv, b, i - 1, k, n, side),     # if bar i is the first close beyond
+            "beyond_atr": float(beyond), "in_zone": bool(lo <= b.close[i] <= hi)}
 
 
 def _break(tech: Tech, i: int, s, side: str) -> list[Firing]:
@@ -273,32 +280,32 @@ def _break(tech: Tech, i: int, s, side: str) -> list[Firing]:
     out = []
     for lv in tech.levels:
         c = _break_conditions(tech, lv, i, s, side)
-        if c is None or not all(c[x] for x in ("closes_beyond_zone", "full_bodied", "engulfs_prior",
-                                                 "prior_close_in_play", "acted_as_level")):
+        if c is None or not all(c[x] for x in ("closes_beyond_zone", "prior_closes_beyond_zone", "full_bodied",
+                                                 "engulfs_prior", "prior_side")):
             continue
         ev = _lvl_ev(lv, i, b, k)
-        ev.update({"break_bar": b.ohlc(i), "prior_bar": b.ohlc(i - 1), "body_ratio": _r(body_ratio(b, i), 3),
-                   "beyond_zone_atr": _r(c["beyond_atr"], 3),
+        ev.update({"break_bar": b.ohlc(i), "first_close_bar": b.ohlc(i - 1), "body_ratio": _r(body_ratio(b, i), 3),
+                   "prior_side_bars": s.signals.break_prior_side_bars, "beyond_zone_atr": _r(c["beyond_atr"], 3),
                    "stretched": c["beyond_atr"] > s.signals.chase_atr})
         out.append((lv, ev))
     return out
 
 
-@register("support_break", "break", "bearish",
-          ("full_body_ratio", "break_engulfing_require_opposite_color", "engulfing_tolerance_atr",
-           "break_prior_side_lookback", "chase_atr"),
-          "Bar N closes below zone_low; is full-bodied bearish; its body engulfs bar N-1's body; bar N-1 closed "
-          "≤ zone_high (level in play); and some close in the prior `break_prior_side_lookback` bars was above "
-          "zone_high (level acted as support).")
+_BREAK_PARAMS = ("full_body_ratio", "break_engulfing_require_opposite_color", "engulfing_tolerance_atr",
+                 "break_prior_side_bars", "chase_atr")
+
+
+@register("support_break", "break", "bearish", _BREAK_PARAMS,
+          "2-bar break: bars N-1 and N both close below zone_low; bar N is full-bodied bearish and its body engulfs "
+          "bar N-1's body; the `break_prior_side_bars` closes before N-1 were all ≥ zone_low (price came from the "
+          "support side, so a reclaim of a level price was already beyond is not a break).")
 def support_break(tech: Tech, i: int, s) -> list[Firing]:
     return _break(tech, i, s, "support")
 
 
-@register("resistance_break", "break", "bullish",
-          ("full_body_ratio", "break_engulfing_require_opposite_color", "engulfing_tolerance_atr",
-           "break_prior_side_lookback", "chase_atr"),
-          "Mirror of support_break: close above zone_high, full-bodied bullish, engulfs N-1, N-1 closed ≥ zone_low, "
-          "and a prior close below zone_low within the lookback.")
+@register("resistance_break", "break", "bullish", _BREAK_PARAMS,
+          "Mirror of support_break: N-1 and N both close above zone_high, N full-bodied bullish and engulfs N-1, "
+          "and the `break_prior_side_bars` closes before N-1 were all ≤ zone_high.")
 def resistance_break(tech: Tech, i: int, s) -> list[Firing]:
     return _break(tech, i, s, "resistance")
 
@@ -310,28 +317,28 @@ def _break_near(tech: Tech, i: int, s, side: str) -> list[NearResult]:
     if np.isnan(a) or a <= 0:
         return out
     fired = {lv.id for lv, _ in _break(tech, i, s, side)}
+    word = "below" if side == "support" else "above"
     for lv in tech.levels:
         if lv.id in fired:
             continue
         c = _break_conditions(tech, lv, i, s, side)
-        if c is None or not c["acted_as_level"]:
+        if c is None:
             continue
         nxt = project_next(lv, i)
         zlo, zhi = nxt - k * a, nxt + k * a
-        note = " — the bar must also be full-bodied and engulf the prior body"
-        if c["in_zone"]:
+        edge = zlo if side == "support" else zhi
+        if c["in_zone"] and c["prior_side_next"]:
             dist = (b.close[i] - zlo) / a if side == "support" else (zhi - b.close[i]) / a
-            desc = f"price in {lv.label} zone; no break yet"
-        elif c["closes_beyond_zone"] and c["prior_close_in_play"]:
+            desc = f"price in {lv.label} zone; no break yet (needs 2 closes {word} the zone)"
+            note = " — first of 2 closes; the second must be full-bodied and engulf the first"
+        elif c["closes_beyond_zone"] and not c["prior_closes_beyond_zone"] and c["prior_side_next"]:
             dist = 0.0
-            failed = [n for n in ("full_bodied", "engulfs_prior") if not c[n]]
-            desc = f"closed through {lv.label} zone but not confirmed ({', '.join(failed)} failed)"
+            desc = f"first close {word} {lv.label} zone; needs a second full-bodied, engulfing close {word} it"
+            note = " — second close; must be full-bodied and engulf this bar's body"
         else:
             continue
-        if side == "support":
-            trig = AlertPrice("Break trigger", zlo, f"close below ${zlo:.2f} ({lv.label} zone low){note}")
-        else:
-            trig = AlertPrice("Break trigger", zhi, f"close above ${zhi:.2f} ({lv.label} zone high){note}")
+        trig = AlertPrice("Break trigger", edge, f"close {word} ${edge:.2f} ({lv.label} zone "
+                                                 f"{'low' if side == 'support' else 'high'}){note}")
         out.append(NearResult(f"{side}_break", lv, desc, float(max(dist, 0.0)),
                               [trig, *_zone_alerts(lv, nxt, zlo, zhi)]))
     return out
