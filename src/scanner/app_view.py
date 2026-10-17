@@ -85,6 +85,30 @@ def symbol_rankings(res: RunResult) -> list[SymbolRow]:
     return sorted(out, key=lambda r: (-r.best.fraction, -best_score[r.symbol], r.symbol))
 
 
+def card_rankings(res: RunResult, symbols: list[str] | None = None,
+                  strategy_ids: list[str] | None = None) -> list[tuple[SymbolRow, StrategyRow]]:
+    """One card per (symbol, evaluated strategy): % of rules met desc, then candidate score, symbol, strategy.
+    Limited to the picked symbols/strategies (empty or None = all)."""
+    syms = set(symbols) if symbols else None
+    sids = set(strategy_ids) if strategy_ids else None
+    pairs = [(s, r) for s in symbol_rankings(res) for r in s.rows
+             if (syms is None or s.symbol in syms) and (sids is None or r.ev.strategy.id in sids)]
+    return sorted(pairs, key=lambda p: (-p[1].fraction, -p[1].score, p[0].symbol, p[1].ev.strategy.name))
+
+
+_SCORE_STOPS = ((0.0, (214, 39, 40)), (50.0, (230, 184, 0)), (100.0, (44, 160, 44)))  # red, yellow, green
+
+
+def score_color(score: float) -> str:
+    """Hex color for a 0–100 score: red at 0, yellow at 50, green at 100 (linear in between, clamped)."""
+    x = min(max(score, 0.0), 100.0)
+    for (x0, c0), (x1, c1) in zip(_SCORE_STOPS, _SCORE_STOPS[1:], strict=False):
+        if x <= x1:
+            t = (x - x0) / (x1 - x0)
+            return "#" + "".join(f"{round(a + (b - a) * t):02x}" for a, b in zip(c0, c1, strict=True))
+    raise AssertionError("unreachable")
+
+
 def filtered_result(res: RunResult, symbols: list[str] | None, strategy_ids: list[str] | None) -> RunResult:
     """A copy of a full scan limited to the picked symbols/strategies (empty or None = all), for the HTML report."""
     syms = set(symbols) if symbols else None

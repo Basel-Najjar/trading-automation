@@ -351,6 +351,17 @@ footer { margin: 34px 0 20px; font-size: 12px; color: var(--muted); border-top: 
   window.toggleTheme = toggleTheme;
   try { var t = localStorage.getItem("scan-theme"); if (t) document.documentElement.setAttribute("data-theme", t); } catch (e) {}
 
+  // In-page anchors scroll instead of navigating: inside a srcdoc iframe (Streamlit app) "#x" resolves against the
+  // parent URL, so a plain navigation would load the whole app inside the frame.
+  document.addEventListener("click", function (ev) {
+    var a = ev.target.closest('a[href^="#"]');
+    if (!a) return;
+    var el = document.getElementById(decodeURIComponent(a.getAttribute("href").slice(1)));
+    if (!el) return;
+    ev.preventDefault();
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
   document.addEventListener("click", function (ev) {
     var b = ev.target.closest("button[data-copy]");
     if (!b) return;

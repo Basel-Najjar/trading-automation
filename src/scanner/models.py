@@ -309,3 +309,20 @@ class SymbolAnalysis:
     @property
     def as_of(self) -> date:
         return self.bars.dates[self.last_idx]
+
+
+def jsonable(obj: Any) -> Any:
+    """Evidence dicts made JSON-safe and deterministic (numpy scalars → Python, NaN → None, floats rounded)."""
+    if isinstance(obj, dict):
+        return {str(k): jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [jsonable(v) for v in obj]
+    if isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, (float, np.floating)):
+        return None if np.isnan(obj) else round(float(obj), 4)
+    if hasattr(obj, "isoformat"):
+        return obj.isoformat()
+    return obj

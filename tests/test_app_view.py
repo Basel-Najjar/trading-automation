@@ -7,9 +7,11 @@ from datetime import date
 import pytest
 
 from scanner.app_view import (
+    card_rankings,
     card_tooltip,
     detail_view,
     filtered_result,
+    score_color,
     split_summary,
     strategy_rows,
     symbol_rankings,
@@ -55,6 +57,32 @@ def test_rankings_sorted_and_best_is_max(res):
     for c in res.candidates:
         if c.status is Tri.TRUE:
             assert next(r for r in ranked if r.symbol == c.symbol).best.fraction == 1.0
+
+
+def test_card_rankings_one_per_symbol_strategy(res):
+    cards = card_rankings(res)
+    assert len(cards) == sum(len(evs) for evs in res.evals.values())
+    assert len({(s.symbol, r.ev.strategy.id) for s, r in cards}) == len(cards)
+    keys = [(-r.fraction, -r.score) for _, r in cards]
+    assert keys == sorted(keys)
+
+
+def test_card_rankings_filters(res):
+    cards = card_rankings(res)
+    sym, sid = cards[0][0].symbol, cards[0][1].ev.strategy.id
+    assert card_rankings(res, [], []) == cards
+    assert {s.symbol for s, _ in card_rankings(res, [sym])} == {sym}
+    assert {r.ev.strategy.id for _, r in card_rankings(res, strategy_ids=[sid])} == {sid}
+    both = card_rankings(res, [sym], [sid])
+    assert [(s.symbol, r.ev.strategy.id) for s, r in both] == [(sym, sid)]
+
+
+def test_score_color_scale():
+    assert score_color(0) == "#d62728"
+    assert score_color(50) == "#e6b800"
+    assert score_color(100) == "#2ca02c"
+    assert score_color(-5) == score_color(0) and score_color(140) == score_color(100)
+    assert score_color(25) == "#de7014"
 
 
 def test_filtered_result_keeps_only_picks(res, cfg):

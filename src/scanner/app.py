@@ -15,12 +15,13 @@ import pandas as pd
 import streamlit as st
 
 from scanner.app_view import (
+    card_rankings,
     card_tooltip,
     detail_view,
     filtered_result,
+    score_color,
     split_summary,
     strategy_rows,
-    symbol_rankings,
     ticker_description,
 )
 from scanner.config import Config, Strategy, load_config
@@ -60,7 +61,8 @@ def _load() -> Config | None:
 
 
 def _clear_results() -> None:
-    for key in ("res", "cfg", "selected_symbol", "report_cache", "profiles"):
+    for key in ("res", "cfg", "selected_symbol", "selected_strategy", "report_cache", "profiles", "card_symbols",
+                "card_strategies"):
         st.session_state.pop(key, None)
 
 
@@ -110,44 +112,63 @@ def _summary(res: RunResult) -> None:
 
 
 def _cards(res: RunResult, cfg: Config) -> None:
-    ranked = symbol_rankings(res)
-    st.subheader("Top symbols")
-    st.caption("Score (0–100) is the best strategy's candidate score. Symbols with a full match come first, highest "
-               "score first; symbols with no candidate show — and follow by share of rules met (PENDING_CLOSE counts "
-               "as not met).")
+    st.subheader("Top setups")
+    st.caption("One card per symbol × strategy. Score (0–100) is that strategy's candidate score, colored red (0) → "
+               "yellow (50) → green (100). Full matches come first, highest score first; combinations with no "
+               "candidate show — and follow by share of rules met (PENDING_CLOSE counts as not met).")
+    evaluated = sorted({ev.strategy.id for evs in res.evals.values() for ev in evs},
+                       key=lambda sid: cfg.strategy(sid).name if cfg.strategy(sid) else sid)
+    c1, c2 = st.columns(2)
+    symbols = c1.multiselect("Filter by symbol", sorted(res.analyses), key="card_symbols",
+                             placeholder="All symbols")
+    strategies = c2.multiselect("Filter by strategy", evaluated, key="card_strategies", placeholder="All strategies",
+                                format_func=lambda sid: cfg.strategy(sid).name if cfg.strategy(sid) else sid)
+    ranked = card_rankings(res, symbols, strategies)
     if not ranked:
-        st.info("No symbols with evaluated strategies.")
+        st.info("No cards match the filters." if symbols or strategies else "No symbols with evaluated strategies.")
         return
+    grid = st.container()  # filled after the slider below it is read
     n = len(ranked) if len(ranked) <= 1 else st.slider("Cards", 1, len(ranked), min(10, len(ranked)))
-    selected = st.session_state.get("selected_symbol")
+    symbol = st.session_state.get("selected_symbol")
+    selected = (symbol, _picked_strategy(res, symbol)) if symbol in res.analyses else None
     shown = ranked[:n]
     for start in range(0, len(shown), CARDS_PER_ROW):
-        cols = st.columns(CARDS_PER_ROW)
-        for col, row in zip(cols, shown[start:start + CARDS_PER_ROW], strict=False):
-            b = row.best
-            tip = card_tooltip(_description(cfg, row.symbol))
+        cols = grid.columns(CARDS_PER_ROW)
+        for col, (sym, r) in zip(cols, shown[start:start + CARDS_PER_ROW], strict=False):
+            sid = r.ev.strategy.id
             with col.container(border=True):
-                st.markdown(f"**{row.symbol}** · {row.close:,.2f} "
-                            f":{'green' if row.change_pct >= 0 else 'red'}[{row.change_pct:+.2f}%]", help=tip)
-                score = f"{b.cand.score:.1f}" if b.cand else "—"
-                pend = " · ⏳" if b.cand and b.pending else ""
-                st.metric("Score", score, f"{b.met}/{b.total} rules met{pend}", delta_color="off",
-                          help=None if b.cand else "No strategy fully matches, so there is no candidate score.")
-                st.caption(f"{b.ev.strategy.name}  \n{row.trend} · {row.n_full} full match"
-                           f"{'' if row.n_full == 1 else 'es'}{' · ⏳ pending' if row.pending else ''}")
-                if st.button("View", key=f"card_{row.symbol}", width="stretch", help=tip,
-                             type="primary" if row.symbol == selected else "secondary"):
-                    st.session_state["selected_symbol"] = row.symbol
+                st.markdown(f"**{sym.symbol}** · {sym.close:,.2f} "
+                            f":{'green' if sym.change_pct >= 0 else 'red'}[{sym.change_pct:+.2f}%]",
+                            help=card_tooltip(_description(cfg, sym.symbol)))
+                st.markdown(f"**{r.ev.strategy.name}**")
+                if r.cand:
+                    st.markdown(f"<span style='font-size:2rem;font-weight:600;color:{score_color(r.cand.score)}'>"
+                                f"{r.cand.score:.1f}</span>", unsafe_allow_html=True)
+                else:
+                    st.markdown("<span style='font-size:2rem;font-weight:600;opacity:.5'>—</span>",
+                                unsafe_allow_html=True,
+                                help="This strategy does not fully match, so there is no candidate score.")
+                st.caption(f"{r.met}/{r.total} rules met · {r.ev.strategy.bias} · {sym.trend}"
+                           f"{' · ⏳ pending' if r.pending else ''}")
+                if st.button("View", key=f"card_{sym.symbol}_{sid}", width="stretch",
+                             type="primary" if selected == (sym.symbol, sid) else "secondary"):
+                    st.session_state["selected_symbol"] = sym.symbol
+                    st.session_state["selected_strategy"] = sid
+                    st.session_state.pop(f"strategies_{sym.symbol}", None)  # the card's pick beats a stale row pick
                     st.rerun()
 
 
 def _picked_strategy(res: RunResult, symbol: str) -> str | None:
-    """The strategy picked in the table below the details (read from its state, since it renders later)."""
+    """The strategy picked in the table below the details (read from its state, since it renders later), else the
+    one from the clicked card, else the best match."""
     rows = strategy_rows(res, symbol)
     state = st.session_state.get(f"strategies_{symbol}") or {}
     picked = (state.get("selection") or {}).get("rows") or []
     if picked and picked[0] < len(rows):
         return rows[picked[0]].ev.strategy.id
+    card = st.session_state.get("selected_strategy")
+    if any(r.ev.strategy.id == card for r in rows):
+        return card
     return rows[0].ev.strategy.id if rows else None
 
 

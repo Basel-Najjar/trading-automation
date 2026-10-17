@@ -137,8 +137,8 @@
   bias: neutral
   technical:
     trend: [range]
-    signals_all: [range_bound, range_mid]
-    signals_any: [resistance_hold, support_hold]
+    signals_all: []
+    signals_any: [resistance_hold, support_hold, range_bound, range_mid]
     not_extended: auto
     alignment: ignore
   construction:
