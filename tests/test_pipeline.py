@@ -146,7 +146,7 @@ def test_flow_components_present(cfg, market_frames):
 def test_strategy_filter_and_disabled(cfg, market_frames):
     res = scan(cfg, market_frames, D, strategy_ids=["bull_put_spread", "flyagonal"])
     assert res.strategies_enabled == ["bull_put_spread"]
-    assert res.strategies_skipped == [("flyagonal", "stub")]
+    assert res.strategies_skipped == [("flyagonal", "disabled")]
     assert all(c.strategy_id == "bull_put_spread" for c in res.candidates)
 
 

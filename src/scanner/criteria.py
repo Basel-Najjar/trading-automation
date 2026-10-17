@@ -183,7 +183,7 @@ def strategy_criteria(cfg: Config) -> list[StrategyCriteria]:
     out = []
     for strat in cfg.strategies:
         s = cfg.settings.with_overrides(strat.technical.overrides)
-        # an inactive strategy with no technical rules (a stub) has nothing to show
+        # an inactive strategy with no technical rules has nothing to show
         rules = [] if strat.technical.is_empty and not strat.active else strategy_rules(strat, s)
         out.append(StrategyCriteria(strat, strat.active, dict(strat.technical.overrides), rules,
                                     _outcome(strat, s) if strat.active else []))

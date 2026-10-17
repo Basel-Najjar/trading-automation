@@ -147,7 +147,7 @@ def scan(
 
     strategies = [st for st in cfg.strategies if strategy_ids is None or st.id in strategy_ids]
     active = [st for st in strategies if st.active]
-    skipped_strats = [(st.id, "stub" if st.status == "stub" else "disabled") for st in strategies if not st.active]
+    skipped_strats = [(st.id, "disabled") for st in strategies if not st.active]
     variants = {overrides_key(st.technical.overrides): s.with_overrides(st.technical.overrides)
                 for st in active if st.technical.overrides}
 

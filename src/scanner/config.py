@@ -308,21 +308,12 @@ class Strategy(BaseModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     name: str
     enabled: bool = True
-    status: Literal["complete", "partial", "stub"] = "complete"
     bias: Literal["bullish", "bearish", "non_bearish", "non_bullish", "neutral"]
     description: str = ""
     technical: Technical = Field(default_factory=Technical)
     scoring: StrategyScoring = Field(default_factory=StrategyScoring)
-    construction: list[str] = Field(default_factory=list)
-    orats_checklist: list[str] = Field(default_factory=list)
-    other_manual_checks: list[str] = Field(default_factory=list)
-    plan: dict[str, Any] = Field(default_factory=dict)
 
-    _lists = field_validator("construction", "orats_checklist", "other_manual_checks", mode="before")(
-        _none_to_list
-    )
-
-    @field_validator("technical", "scoring", "plan", mode="before")
+    @field_validator("technical", "scoring", mode="before")
     @classmethod
     def _none_to_dict(cls, v: Any) -> Any:
         return {} if v is None else v
@@ -336,7 +327,7 @@ class Strategy(BaseModel):
 
     @property
     def active(self) -> bool:
-        return self.enabled and self.status != "stub"
+        return self.enabled
 
     @property
     def not_extended_resolved(self) -> str:
@@ -541,6 +532,9 @@ def load_settings(path: Path, issues: list[Issue]) -> Settings | None:
     return s
 
 
+REMOVED_STRATEGY_KEYS = ("status", "construction", "orats_checklist", "other_manual_checks", "plan")
+
+
 def load_strategies(path: Path, issues: list[Issue]) -> list[Strategy] | None:
     if not path.exists():
         issues.append(Issue(path.name, None, "", "file missing (required)"))
@@ -568,6 +562,14 @@ def load_strategies(path: Path, issues: list[Issue]) -> list[Strategy] | None:
                                     f"duplicate id '{raw_id}' (first defined on line {seen[raw_id]})"))
                 ok = False
             seen.setdefault(raw_id, _line_for(lines, (i, "id")) or 0)
+        removed = [k for k in REMOVED_STRATEGY_KEYS if k in raw]
+        for k in removed:
+            issues.append(Issue(path.name, _line_for(lines, (i, k)), label + f".{k}",
+                                "no longer supported: the scanner keeps technical parameters only (non-technical "
+                                "playbook fields were removed); delete this key"))
+        if removed:
+            ok = False
+            continue
         try:
             s = Strategy.model_validate(raw)
         except ValidationError as e:

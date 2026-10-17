@@ -1,0 +1,7 @@
+# Read when the app is started from the repository root (uv run streamlit run src/scanner/app.py).
+[theme]
+# A neutral accent: green and red are kept for meaning (up/down, bullish/bearish, pass/fail).
+primaryColor = "#7579c7"
+
+[client]
+toolbarMode = "minimal"

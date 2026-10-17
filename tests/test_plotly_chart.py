@@ -10,7 +10,7 @@ import pytest
 
 from scanner.charts import chart_levels
 from scanner.pipeline import scan
-from scanner.plotly_chart import missing_sessions, price_figure
+from scanner.plotly_chart import Overlay, missing_sessions, price_figure
 
 D = date(2026, 9, 30)
 
@@ -106,3 +106,61 @@ def test_legend_starts_collapsed_and_lists_level_values(sa):
         line = next(t for t in fig.data if t.legendgroup == lv.id and t.fill is None)
         assert line.mode == "lines" and not line.text  # no id label at the line's end
         assert f"{lv.value(sa.last_idx):,.2f}" in line.name
+
+
+def test_highlight_emphasises_one_level_and_fades_the_rest(sa):
+    levels = chart_levels(sa)
+    assert len(levels) >= 2
+    fig = price_figure(sa, levels, [], 150, 0.25, 70, 30, highlight={levels[0].id})
+    lines = {t.legendgroup: t for t in fig.data if t.type == "scatter" and t.mode == "lines" and t.legendgroup}
+    hi = lines[levels[0].id]
+    assert hi.line.dash == "solid" and hi.opacity == 1.0
+    assert all(lines[lv.id].opacity < 1.0 for lv in levels[1:] if lv.id in lines)
+    tags = [a for a in fig.layout.annotations if a.yref == "y2"]
+    assert len(tags) == 1 and f"{levels[0].value(sa.last_idx):,.2f}" in tags[0].text
+
+
+def test_no_highlight_draws_levels_alike(sa):
+    fig = _fig(sa)
+    lines = [t for t in fig.data if t.type == "scatter" and t.mode == "lines" and t.legendgroup]
+    assert lines and all(t.opacity in (None, 1.0) and t.line.dash == "dash" for t in lines)
+    assert not [a for a in fig.layout.annotations if a.yref == "y2"]
+
+
+def test_invalidation_line_on_the_price_axis(sa):
+    fig = price_figure(sa, chart_levels(sa), [], 150, 0.25, 70, 30, invalidation=123.45)
+    shapes = [s for s in fig.layout.shapes if s.yref == "y2"]
+    assert len(shapes) == 1 and shapes[0].y0 == shapes[0].y1 == 123.45
+    assert any("Invalidation 123.45" in a.text for a in fig.layout.annotations)
+
+
+def test_overlays_get_their_own_right_axes(sa):
+    n = len(sa.bars.dates)
+    a = np.linspace(100, 110, n)
+    r = np.full(n, 0.5)
+    r[:5] = np.nan  # gaps in the other series are skipped, not drawn as zeros
+    fig = price_figure(sa, chart_levels(sa), [], 150, 0.25, 70, 30,
+                       overlays=[Overlay("XLK", a, "#111111"), Overlay("XLK/SPY", r, "#222222", ".4f", "dot")])
+    traces = {t.name: t for t in fig.data if t.name in ("XLK", "XLK/SPY")}
+    assert traces["XLK"].yaxis == "y4" and traces["XLK/SPY"].yaxis == "y5"
+    assert len(traces["XLK/SPY"].y) == sa.last_idx + 1 - 5
+    y4, y5 = fig.layout.yaxis4, fig.layout.yaxis5
+    assert y4.overlaying == y5.overlaying == "y" and y4.side == y5.side == "right"
+    assert y4.autoshift and y5.autoshift  # visible overlay axes stack outward instead of overlapping
+    lo, hi = y4.range
+    assert lo < a[sa.last_idx - 149] and hi > a[sa.last_idx]  # fits the visible window
+    # hidden until toggled: one button per overlay, each its own menu so several can be on at once
+    assert traces["XLK"].visible is False and y4.visible is False
+    menus = {m.buttons[0].label: m.buttons[0] for m in fig.layout.updatemenus}
+    assert set(menus) == {"Legend", "XLK", "XLK/SPY"}
+    on, off = menus["XLK/SPY"].args, menus["XLK/SPY"].args2
+    idx = list(fig.data).index(traces["XLK/SPY"])
+    assert on == ({"visible": True}, {"yaxis5.visible": True}, (idx,))
+    assert off == ({"visible": False}, {"yaxis5.visible": False}, (idx,))
+    pads = [m.pad.l for m in fig.layout.updatemenus]
+    assert pads == sorted(pads) and len(set(pads)) == len(pads)  # side by side, not stacked
+
+
+def test_no_overlays_adds_no_axes(sa):
+    fig = _fig(sa)
+    assert "yaxis4" not in fig.layout.to_plotly_json()

@@ -7,6 +7,7 @@ The whole analysis window is plotted; the initial view shows the last `chart_bar
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 import numpy as np
@@ -28,6 +29,23 @@ VOLUME_SHARE = 0.2  # the tallest visible volume bar reaches this fraction of th
 PRICE_PANE = {"row": 1, "col": 1, "secondary_y": True}
 PIVOT_MUTED, PIVOT_USED = "rgba(128,128,128,0.55)", "#6250d6"
 HALF_DAY = timedelta(hours=12)
+FADED = 0.35  # opacity of levels other than the highlighted ones
+PRICE_AXIS = "y2"  # row 1's overlaying (secondary) axis: everything priced is drawn on it
+FIRST_OVERLAY_AXIS = 4  # y and y2 are row 1 (volume, price), y3 is the RSI pane
+MENU_FONT = 11
+
+
+@dataclass(frozen=True)
+class Overlay:
+    """A comparison line (sector ETF, benchmark, ratio) on its own right-hand y-axis over the price pane, hidden
+    until its button above the chart is clicked. `values` is aligned to the symbol's bar index (NaN where the
+    other series has no bar)."""
+
+    label: str
+    values: np.ndarray
+    color: str
+    tickformat: str = ",.2f"
+    dash: str = "solid"
 
 
 def _dt(d: date) -> datetime:
@@ -79,7 +97,10 @@ def _level_start(sa: SymbolAnalysis, lv: Level) -> int:
     return 0
 
 
-def _add_level(fig: go.Figure, sa: SymbolAnalysis, lv: Level, k: float, last: int) -> None:
+def _add_level(fig: go.Figure, sa: SymbolAnalysis, lv: Level, k: float, last: int,
+               emphasis: bool | None = None) -> None:
+    """A level's zone and line. `emphasis` True draws it solid and labels its price at the right edge, False fades
+    it, None (no highlighting asked for) draws every level the same."""
     b = sa.bars
     ts = [t for t in range(_level_start(sa, lv), last + 1) if np.isfinite(lv.values[t]) and np.isfinite(b.atr[t])]
     if len(ts) < 2:
@@ -90,18 +111,71 @@ def _add_level(fig: go.Figure, sa: SymbolAnalysis, lv: Level, k: float, last: in
     top = [float(lv.values[t] + k * b.atr[t]) for t in ts]
     bot = [float(lv.values[t] - k * b.atr[t]) for t in ts]
     name = f"{lv.id} · {role} {lv.value(last):,.2f}"
+    opacity = FADED if emphasis is False else 1.0
     fig.add_trace(go.Scatter(x=xs + xs[::-1], y=top + bot[::-1], fill="toself", fillcolor=ZONE_FILL[role],
-                             line={"width": 0}, hoverinfo="skip", legendgroup=lv.id, showlegend=False, name=name),
-                  **PRICE_PANE)
+                             line={"width": 0}, hoverinfo="skip", legendgroup=lv.id, showlegend=False, name=name,
+                             opacity=opacity), **PRICE_PANE)
     vals = [float(lv.values[t]) for t in ts]
     fig.add_trace(go.Scatter(
-        x=xs, y=vals, mode="lines", name=name, legendgroup=lv.id, hoverinfo="skip",
-        line={"color": color, "width": 1.5, "dash": "dash"},
+        x=xs, y=vals, mode="lines", name=name, legendgroup=lv.id, hoverinfo="skip", opacity=opacity,
+        line={"color": color, "width": 2.5 if emphasis else 1.5, "dash": "solid" if emphasis else "dash"},
     ), **PRICE_PANE)
+    if emphasis:
+        _price_tag(fig, vals[-1], f"{lv.label} {vals[-1]:,.2f}", color, "bottom")
+
+
+def _price_tag(fig: go.Figure, price: float, text: str, color: str, side: str) -> None:
+    """A price label at the right edge, above (`side` "bottom" anchor) or below ("top") its line, so a level's tag
+    and the invalidation tag do not cover each other when the prices are close."""
+    fig.add_annotation(x=1, xref="paper", xanchor="right", y=price, yref=PRICE_AXIS, yanchor=side, text=text,
+                       showarrow=False, font={"size": 11, "color": "#ffffff"}, bgcolor=color, borderpad=2)
+
+
+def _add_overlay(fig: go.Figure, x: list[datetime], ov: Overlay, n: int, start: int, last: int) -> int | None:
+    """Overlay `ov` (hidden) on axis y{n}, right of the plot; visible overlay axes shift outward so they do not
+    overlap. Its initial range fits the visible window, like the price axis. Returns the trace index."""
+    vals = np.asarray(ov.values[:last + 1], dtype=float)
+    ts = _finite(vals, range(len(vals)))
+    if len(ts) < 2:
+        return None
+    fig.add_trace(go.Scatter(x=[x[t] for t in ts], y=vals[ts], mode="lines", name=ov.label, xaxis="x", yaxis=f"y{n}",
+                             visible=False, line={"color": ov.color, "width": 1.5, "dash": ov.dash},
+                             hovertemplate=f"%{{y:{ov.tickformat}}}<extra>{ov.label}</extra>"))
+    seen = vals[start:last + 1]
+    seen = seen[np.isfinite(seen)]
+    if not seen.size:
+        seen = vals[ts]
+    lo, hi = float(seen.min()), float(seen.max())
+    pad = (hi - lo) * 0.06 or abs(hi) * 0.01 or 1.0
+    # overlaying must name the base axis ("y", volume); an axis that itself overlays (y2) is not allowed
+    axis = {"overlaying": "y", "side": "right", "range": [lo - pad, hi + pad], "showgrid": False,
+            "visible": False, "automargin": True, "anchor": "free", "position": 1, "autoshift": True, "shift": 4,
+            "tickformat": ov.tickformat, "tickfont": {"color": ov.color, "size": 10}, "tickmode": "auto",
+            "title": {"text": ov.label, "font": {"color": ov.color, "size": 10}, "standoff": 2}}
+    fig.update_layout({f"yaxis{n}": axis})
+    return len(fig.data) - 1
+
+
+def _toggle(label: str, offset_px: int, args: list, args2: list) -> dict:
+    """A one-button menu in the strip above the chart that toggles `args`/`args2` client-side (no app rerun).
+    Each toggle is its own menu, so several can be on at once; `offset_px` places it after the earlier ones."""
+    # active -1: the first click runs `args` (Plotly treats button 0 as already active and would run `args2`)
+    return {"type": "buttons", "showactive": False, "active": -1, "xanchor": "left", "x": 0, "yanchor": "bottom",
+            "y": 1.01, "pad": {"l": offset_px, "r": 0, "t": 0}, "font": {"size": MENU_FONT},
+            "buttons": [{"label": label, "method": "update" if len(args) > 1 else "relayout",
+                         "args": args, "args2": args2}]}
+
+
+def _button_px(label: str) -> int:
+    return int(len(label) * MENU_FONT * 0.62) + 22
 
 
 def price_figure(sa: SymbolAnalysis, levels: list[Level], signal_bars: list[int], chart_bars: int, k: float,
-                 rsi_ob: float, rsi_os: float) -> go.Figure:
+                 rsi_ob: float, rsi_os: float, highlight: set[str] | None = None,
+                 invalidation: float | None = None, overlays: list[Overlay] | None = None) -> go.Figure:
+    """`highlight`: ids of the levels the setup is about (drawn solid with a price tag; the others are faded).
+    `invalidation`: price drawn as a dotted line with a tag. `overlays`: comparison lines, each on its own
+    right-hand axis."""
     b = sa.bars
     last = sa.last_idx
     start = max(0, last - chart_bars + 1)
@@ -134,7 +208,11 @@ def price_figure(sa: SymbolAnalysis, levels: list[Level], signal_bars: list[int]
 
     # level zones + lines (each level toggles as one legend group)
     for lv in levels:
-        _add_level(fig, sa, lv, k, last)
+        _add_level(fig, sa, lv, k, last, None if not highlight else lv.id in highlight)
+    if invalidation is not None and np.isfinite(invalidation):
+        fig.add_shape(type="line", xref="paper", x0=0, x1=1, yref=PRICE_AXIS, y0=invalidation, y1=invalidation,
+                      line={"color": DOWN, "width": 1.5, "dash": "dot"})
+        _price_tag(fig, invalidation, f"Invalidation {invalidation:,.2f}", DOWN, "top")
 
     # SMAs
     for name, arr in (("sma50", b.sma50), ("sma200", b.sma200)):
@@ -171,17 +249,26 @@ def price_figure(sa: SymbolAnalysis, levels: list[Level], signal_bars: list[int]
     for lvl in (rsi_ob, rsi_os):
         fig.add_hline(y=lvl, line={"dash": "dot", "width": 1, "color": "rgba(128,128,128,0.8)"}, row=2, col=1)
 
+    menus = [_toggle("Legend", 0, [{"showlegend": True}], [{"showlegend": False}])]
+    offset = _button_px("Legend")
+    for i, ov in enumerate(overlays or []):
+        n = FIRST_OVERLAY_AXIS + i
+        if (idx := _add_overlay(fig, x, ov, n, start, last)) is None:
+            continue
+        menus.append(_toggle(ov.label, offset, [{"visible": True}, {f"yaxis{n}.visible": True}, [idx]],
+                             [{"visible": False}, {f"yaxis{n}.visible": False}, [idx]]))
+        offset += _button_px(ov.label)
+
     lo, hi = _visible_range(sa, levels, start, last, k)
     fig.update_layout(
         height=HEIGHT, hovermode="x unified", dragmode="zoom", margin={"l": 56, "r": 16, "t": 36, "b": 8},
-        # the legend starts collapsed; the button expands it (levels with their current values, SMAs, pivots)
+        # the legend starts collapsed; its button expands it below the chart (levels with their current values,
+        # SMAs, pivots, overlays). The buttons sit top-left: the top right belongs to Plotly's mode bar.
         showlegend=False,
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.01, "xanchor": "left", "x": 0},
-        updatemenus=[{"type": "buttons", "showactive": False, "xanchor": "right", "x": 1, "yanchor": "bottom",
-                      "y": 1.01, "pad": {"r": 0, "t": 0}, "font": {"size": 11},
-                      "buttons": [{"label": "Legend", "method": "relayout",
-                                   "args": [{"showlegend": True}], "args2": [{"showlegend": False}]}]}],
+        legend={"orientation": "h", "yanchor": "top", "y": -0.06, "xanchor": "left", "x": 0},
+        updatemenus=menus,
         xaxis_rangeslider_visible=False,
+        uirevision=sa.symbol,  # keep the viewer's zoom/pan across reruns of the same symbol
     )
     breaks = [{"bounds": ["sat", "mon"]}]
     if missing := missing_sessions(b.dates[:last + 1]):

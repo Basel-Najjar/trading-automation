@@ -18,16 +18,15 @@ import pandas as pd
 
 from scanner import __version__
 from scanner.charts import chart_levels, svg_chart
-from scanner.config import Config, Strategy
+from scanner.config import Config
 from scanner.flow import ratio_trend, state_of
 from scanner.levels import confluence_types
 from scanner.models import Candidate, Level, SignalResult, SymbolAnalysis, Tri, WatchItem
 from scanner.pipeline import RunResult
-from scanner.scoring import fill_placeholders
 from scanner.strategies import StrategyEval
 
 DISCLAIMER = ("Automated technical screening based on the owner's predefined rules; not investment advice. "
-              "Manual validation (volatility, fundamentals, events, macro) is required before any trade.")
+              "Manual validation is required before any trade.")
 
 
 def _r(x: Any, nd: int = 4) -> Any:
@@ -117,24 +116,12 @@ def _versions() -> dict[str, str]:
 # ----------------------------------------------------------------------------------------------
 
 
-def _plan_items(strat: Strategy, sa: SymbolAnalysis, s) -> list[tuple[str, Any]]:
-    items = []
-    for key, val in strat.plan.items():
-        if isinstance(val, list):
-            items.append((key, [fill_placeholders(str(v), sa, s) for v in val]))
-        else:
-            items.append((key, fill_placeholders(str(val), sa, s)))
-    return items
-
-
-def _strategy_view(ev: StrategyEval, cand: Candidate | None, sa: SymbolAnalysis, s) -> dict:
+def _strategy_view(ev: StrategyEval, cand: Candidate | None) -> dict:
     st = ev.strategy
-    extra = {k: v for k, v in st.extra_fields.items()}
     return {
-        "id": st.id, "name": st.name, "bias": st.bias, "status": st.status, "description": st.description,
+        "id": st.id, "name": st.name, "bias": st.bias, "description": st.description,
         "match": ev.status.value, "flow": ev.flow_label, "rules": ev.rules, "cand": cand,
-        "construction": st.construction, "orats": st.orats_checklist, "manual": st.other_manual_checks,
-        "plan": _plan_items(st, sa, s), "extra": extra,
+        "extra": st.extra_fields,
     }
 
 
@@ -151,6 +138,31 @@ def _rsi_verdict(rsi: float, s) -> str:
     if rsi <= s.indicators.rsi_oversold:
         return "extended down"
     return "not extended"
+
+
+def market_context(res: RunResult, cfg: Config) -> tuple[dict | None, list[dict]]:
+    """(benchmark summary or None, one row per sector ETF) for the report's and the app's market overview."""
+    k = res.settings.levels.zone_atr_mult
+    bench = res.context.get(res.benchmark) or res.analyses.get(res.benchmark)
+    market = None
+    if bench is not None:
+        market = {"symbol": res.benchmark, "trend": bench.trend, "close": float(bench.bars.close[bench.last_idx]),
+                  "supports": [level_dict(r["level"], bench, k) for r in bench.nearest_support],
+                  "resistances": [level_dict(r["level"], bench, k) for r in bench.nearest_resistance],
+                  "returns": bench.returns}
+    sectors = []
+    for etf in res.sector_etfs:
+        sa = res.context.get(etf) or res.analyses.get(etf)
+        if sa is None:
+            sectors.append({"etf": etf, "trend": "n/a", "vs": "n/a", "returns": {}, "members": []})
+            continue
+        vs = "n/a"
+        if bench is not None:
+            ec, bc = _completed_close(sa), _completed_close(bench)
+            vs = state_of(ratio_trend(ec, bc, res.settings))
+        sectors.append({"etf": etf, "trend": sa.trend.state, "vs": vs, "returns": sa.returns,
+                        "members": sorted(x for x in res.analyses if cfg.sector_for(x) == etf)})
+    return market, sectors
 
 
 def build_view(res: RunResult, cfg: Config, deep: bool = False) -> dict:
@@ -220,29 +232,11 @@ def build_view(res: RunResult, cfg: Config, deep: bool = False) -> dict:
             "levels": lv_rows, "confluence": [_clean(z) for z in sa.confluence],
             "signals": [sg for sg in sa.signals], "rsi": float(sa.bars.rsi[t]),
             "rsi_verdict": _rsi_verdict(float(sa.bars.rsi[t]), s), "relvol": float(sa.bars.relvol[t]),
-            "strategies": [_strategy_view(ev, cmap.get(ev.strategy.id), sa, s) for ev in shown],
+            "strategies": [_strategy_view(ev, cmap.get(ev.strategy.id)) for ev in shown],
             "alerts": alerts, "returns": sa.returns,
         })
 
-    bench = res.context.get(res.benchmark) or res.analyses.get(res.benchmark)
-    market = None
-    if bench is not None:
-        market = {"symbol": res.benchmark, "trend": bench.trend, "close": float(bench.bars.close[bench.last_idx]),
-                  "supports": [level_dict(r["level"], bench, k) for r in bench.nearest_support],
-                  "resistances": [level_dict(r["level"], bench, k) for r in bench.nearest_resistance],
-                  "returns": bench.returns}
-    sectors = []
-    for etf in res.sector_etfs:
-        sa = res.context.get(etf) or res.analyses.get(etf)
-        if sa is None:
-            sectors.append({"etf": etf, "trend": "n/a", "vs": "n/a", "returns": {}, "members": []})
-            continue
-        vs = "n/a"
-        if bench is not None:
-            ec, bc = _completed_close(sa), _completed_close(bench)
-            vs = state_of(ratio_trend(ec, bc, s))
-        sectors.append({"etf": etf, "trend": sa.trend.state, "vs": vs, "returns": sa.returns,
-                        "members": sorted(x for x in res.analyses if cfg.sector_for(x) == etf)})
+    market, sectors = market_context(res, cfg)
 
     started = (res.started or datetime.now()).astimezone(tz)
     bars_through = max((sa.bars.dates[sa.completed_idx] for sa in res.analyses.values()), default=None)

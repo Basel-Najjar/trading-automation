@@ -50,7 +50,6 @@ def test_duplicate_ids_and_bad_types(config_dir):
     text = text.replace("trend: [downtrend, range]", "trend: [downtrend, sideways]", 1)
     text = text.replace("trend: [uptrend]\n    signals_any: [support_hold, bullish_engulfing]",
                         "trend: [any, uptrend]\n    signals_any: [support_hold, bullish_engulfing]", 1)
-    text = text.replace("max_bp_pct: 10\n", "max_bp_pct: 10\n", 1)
     text = text.replace("enabled: true", "enabled: maybe", 1)
     p.write_text(text, encoding="utf-8")
     _, errors, _ = _issues(config_dir)
@@ -162,3 +161,15 @@ def test_unknown_display_keys_preserved(config_dir):
         "  name: Bull Call Spread\n", "  name: Bull Call Spread\n  notes: \"my note\"\n", 1), encoding="utf-8")
     cfg, errors, _ = _issues(config_dir)
     assert not errors and cfg.strategy("bull_call_spread").extra_fields == {"notes": "my note"}
+
+
+def test_removed_non_technical_keys_are_errors(config_dir):
+    p = config_dir / "strategies.yaml"
+    p.write_text(p.read_text(encoding="utf-8").replace(
+        "  name: Bull Call Spread\n",
+        "  name: Bull Call Spread\n  status: complete\n  plan:\n    profit_target: \"50%\"\n", 1), encoding="utf-8")
+    cfg, errors, _ = _issues(config_dir)
+    assert cfg is None
+    for key, line in (("status", 7), ("plan", 8)):
+        assert any(f"strategies.yaml:{line}:" in e and f"(bull_call_spread).{key}:" in e and "no longer supported" in e
+                   for e in errors), errors

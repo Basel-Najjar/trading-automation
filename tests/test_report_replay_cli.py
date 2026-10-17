@@ -46,7 +46,8 @@ def test_report_many_candidates(cfg, market_frames):
     _assert_self_contained(html)
     for c in res.candidates:
         assert f'id="card-{c.symbol}"' in html
-    assert "<svg" in html and 'type="checkbox"' in html and "data-copy" in html
+    assert "<svg" in html and "data-copy" in html
+    assert 'type="checkbox"' not in html  # no manual checklists on cards
 
 
 def test_report_zero_candidates_and_missing_sector(cfg, market_frames):
@@ -203,7 +204,7 @@ def test_no_out_of_scope_data_paths():
     for p in (ROOT / "src" / "scanner").glob("*.py"):
         src = p.read_text(encoding="utf-8")
         names = {t.string for t in tokenize.generate_tokens(io.StringIO(src).readline) if t.type == tokenize.NAME}
-        allowed = {"orats_checklist"}  # display-only checklist text (SP-3), never evaluated
+        allowed = set()
         if p.name == "app.py":
             allowed.add("options")  # Streamlit's dropdown keyword (SelectboxColumn(options=...)), not option chains
         bad = sorted(n for n in names - allowed if forbidden & set(n.lower().split("_")))

@@ -17,7 +17,7 @@ The scanner is the **discovery layer only**. The owner takes the ranked shortlis
 ### 1.1 Goals
 
 - G1. Encode the owner's simple technical process (S/R from SMAs and pivot-based lines, pivot-based trend, 1-bar/engulfing confirmations, RSI extension) as deterministic, inspectable rules.
-- G2. Produce a **ranked shortlist** with the candidate **strategies** each setup supports, plus a **manual checklist** (ORATS criteria and other manual checks) for the owner to work through.
+- G2. Produce a **ranked shortlist** with the candidate **strategies** each setup supports, with the technical evidence, score breakdown and alert prices behind each one.
 - G3. Make every result **explainable**: which levels, which bars, which rule fired, and why a candidate ranked where it did.
 - G4. Give the owner **concrete price levels** per candidate to copy into TradingView alerts (trigger prices, zone edges, invalidation levels).
 - G5. Keep the strategy playbook in a **single, human-editable file** so the owner can add, remove, or tune strategies without code changes.
@@ -49,7 +49,6 @@ The scanner is the **discovery layer only**. The owner takes the ranked shortlis
 | **Setup / candidate** | A (symbol, strategy) pair whose technical conditions are satisfied. |
 | **Bias** | Strategy direction label: `bullish`, `bearish`, `non_bearish`, `non_bullish`, `neutral`. |
 | **Watch item** | A symbol that is *near* a setup but not yet triggered, with the trigger price. |
-| **D/F/S edge** | ORATS dashboard calculations: **D**istribution (Monte Carlo), **F**orecast (volatility forecast), **S**mooth-market volatilities (theoretical pricing). Manual-checklist item only. |
 | **wld** | Win/lose/draw (used in the owner's "time-based exits" notes). Informational text on strategy cards. |
 
 ---
@@ -254,7 +253,7 @@ The owner favors going with the flow over countertrading.
 ### 6.6 Strategy Matching
 
 - SM-1. For every symbol × every **enabled** strategy in `strategies.yaml`, evaluate the strategy's technical rules (§7.3). A symbol can match multiple strategies; show all matches.
-- SM-2. Strategies with `enabled: false` or `status: stub` are skipped; the run summary lists them as skipped.
+- SM-2. Strategies with `enabled: false` are skipped; the run summary lists them as skipped.
 - SM-3. A match requires: trend state in the strategy's allowed set (if specified), the required signals (`signals_all`) and at least one of `signals_any` (if specified), the `not_extended` rule (if specified), and flow alignment per its setting.
 - SM-4. The match result lists each rule evaluated with `pass | fail | PENDING_CLOSE` and the evidence, to support `scanner explain` (§10).
 
@@ -332,11 +331,9 @@ report:
 
 - SP-1. **One file** holds all strategies. It is the owner's playbook and must be easy to read and edit by hand: plain-language keys, comments allowed, **no code changes** needed to add, disable, or tune a strategy.
 - SP-2. Technical rules reference only the **named vocabulary** in §6.4 and §7.3 (signals, trend states, `not_extended`, flow alignment). The agent must provide `docs/signals.md` listing every vocabulary item, its meaning, and its parameters.
-- SP-3. Each strategy has two kinds of content:
-  - **Evaluated by the scanner:** `bias`, `technical` rules.
-  - **Display-only (never evaluated):** `construction`, `orats_checklist`, `other_manual_checks`, `plan` (profit target, stop loss, management, max BP%). Shown verbatim on candidate cards.
+- SP-3. A strategy holds technical parameters only: `id`, `name`, `enabled`, `bias`, `technical` rules and optional `scoring.weights`. Non-technical playbook content (trade construction, ORATS/fundamental/earnings/macro checklists, profit targets, stop losses, management, position size, completeness `status`) is not part of the config; those keys are rejected by `scanner validate` (removed 2026-10-17).
 - SP-4. `scanner validate` lints the file: unknown signal names, invalid trend states, wrong types, duplicate IDs, with line numbers where feasible, and suggestions ("did you mean `support_hold`?").
-- SP-5. The file is reloaded every run (no caching of parsed strategies across runs). Unknown *display-only* keys are preserved and shown (the owner may add fields like `notes`).
+- SP-5. The file is reloaded every run (no caching of parsed strategies across runs). Other unknown keys are preserved and shown verbatim, never evaluated (the owner may add fields like `notes`).
 - SP-6. A strategy can be turned off with `enabled: false` without deleting it.
 
 ### 7.2 Strategy entry schema
@@ -345,7 +342,6 @@ report:
 - id: bull_put_spread              # unique, snake_case
   name: Bull Put Spread
   enabled: true
-  status: complete                 # complete | partial | stub
   bias: non_bearish                # bullish | bearish | non_bearish | non_bullish | neutral
   description: "Short-dated premium-selling spread, entered on a support reversal."
 
@@ -356,23 +352,8 @@ report:
     not_extended: auto             # auto | none | up | down  (auto: bullish→not extended up, bearish→not extended down, others→none)
     alignment: soft                # soft | required | ignore
 
-  construction:                    # display-only text
-    - "Sell ~0.3Δ put 5–20 DTE; buy put one strike lower, same expiration"
-    - "Aim to collect ~1/3 of strike width in premium"
-  orats_checklist:                 # display-only; manual ORATS dashboard check
-    - "IVR > 50"
-    - "ivHvXernRatio > 1"
-  other_manual_checks:             # display-only; scanner never evaluates these
-    - "No earnings within DTE horizon"
-    - "Check for macro events"
-  plan:                            # display-only
-    max_bp_pct: 5
-    profit_target: "30 – 75% of credit"
-    stop_loss: "35 – 100% of credit received"
-    management:
-      - "Exit if 2-bar close below short strike"
-      - "Exit no later than Wednesday before expiration"
-      - "Utilize time-based exits (win/lose/draw)"
+  scoring:                         # optional; replaces settings.yaml → scoring.weights keys for this strategy
+    weights: { level_quality: 25, entry_quality: 15 }
 ```
 
 ### 7.3 Technical rule semantics
@@ -386,16 +367,15 @@ report:
 
 ### 7.4 Candidate-card behavior for display-only fields
 
-- The card shows `construction`, `orats_checklist`, `other_manual_checks`, and `plan` verbatim, with each checklist line rendered as a **checkbox** (client-side only; state need not persist).
-- Level-derived text may be appended to the plan (e.g., "Management: exit on 2-bar close below support — **$X** (zone low)") by substituting the nearest relevant level into configured placeholders such as `{nearest_support}` and `{nearest_resistance}` if the owner uses them in management text. Placeholder syntax documented in `docs/signals.md`.
+Removed 2026-10-17. Cards show technical content only (rules, evidence, score, alert prices). The plan checklists and the `{nearest_support}`/`{nearest_resistance}` plan placeholders no longer exist; the alert helper gives the same level prices.
 
 ### 7.5 Scope of seeded strategies
 
 All strategies from the owner's playbook are seeded in Appendix A with technical rules inferred from the technical cues in the playbook. Strategies excluded or limited:
 
-- **TED Calendar:** seeded but `enabled: false` (depends on earnings dates, which are out of scope).
-- **Flyagonal:** seeded as `status: stub`, `enabled: false` (the playbook has no criteria).
-- All other strategies are enabled; their fundamental/ORATS/event conditions appear only as manual checks.
+- **TED Calendar:** seeded but `enabled: false` (no technical rules).
+- **Flyagonal:** seeded with `enabled: false` (no technical rules).
+- All other strategies are enabled. Their fundamental/ORATS/event conditions are outside the scanner and the config.
 
 ---
 
@@ -427,7 +407,7 @@ The scanner does **not** compute, fetch, or evaluate:
 - ORATS fields (IV rank, forecasts, ratios, D/F/S edge, etc.)
 - Any option chain, strike, delta, credit, or pricing
 
-These appear only as **checklist text** on candidate cards (`orats_checklist`, `other_manual_checks`) so the owner's manual workflow in TradingView / ORATS dashboard / Google Finance is prompted consistently.
+These are not represented anywhere in the scanner, its config or its output; the owner checks them outside the tool.
 
 ---
 
@@ -442,17 +422,17 @@ These appear only as **checklist text** on candidate cards (`orats_checklist`, `
   3. **Ranked shortlist:** sortable and filterable table (client-side JS): rank, symbol, price, strategies matched (chips), primary signal, score, trend, flow alignment, RSI, nearest level + distance (ATR), age, copy-friendly alert level. Filters: by strategy, bias, signal, alignment.
   4. **Candidate cards** (one per symbol with all its matched strategies), see OUT-3.
   5. **Watch list:** near-setups with trigger prices.
-  6. **Skipped/diagnostics:** data-quality issues, failed downloads, insufficient-history symbols, disabled/stub strategies.
+  6. **Skipped/diagnostics:** data-quality issues, failed downloads, insufficient-history symbols, disabled strategies.
 - OUT-3. **Candidate card contents:**
   - Header: symbol, last close, change, as-of, score, rank.
   - **Chart** (static, embedded as inline SVG or base64 PNG): last `chart_bars` daily candles, SMA50/SMA200, shaded zones for relevant levels, drawn trendlines, pivot markers, signal bar(s) highlighted, RSI subplot with 70/30 lines.
   - **Technical read:** trend state with the pivots used; levels table (type, role, level, zone, touches, confluence sources); signals fired with evidence (bar dates, OHLC, ratios); RSI and extension verdict; relative volume (info).
   - **Relative strength:** SPY trend, sector-vs-SPY, name-vs-sector with component trend states; `with_flow` label.
-  - **Strategies matched:** for each, rules evaluated (pass/fail/pending) and the strategy's **manual checklist** (ORATS items, other manual checks), plus construction text and plan text with level placeholders resolved.
+  - **Strategies matched:** for each, rules evaluated (pass/fail/pending) with evidence.
   - **Alert helper:** a plain-text block of suggested TradingView alert prices (e.g., trigger, invalidation, zone edges), each with a one-line meaning and a copy button.
   - **Score breakdown:** component table.
 - OUT-4. Visual design: clean, readable, printable; light/dark friendly; works on desktop and phone-width screens.
-- OUT-5. A footer disclaimer: *"Automated technical screening based on the owner's predefined rules; not investment advice. Manual validation (volatility, fundamentals, events, macro) is required before any trade."*
+- OUT-5. A footer disclaimer: *"Automated technical screening based on the owner's predefined rules; not investment advice. Manual validation is required before any trade."*
 
 ### 10.2 Secondary Outputs
 
@@ -512,7 +492,7 @@ scanner cache refresh|info
 3. Trend state uses higher/lower pivot highs and lows exactly as in TE-16 and shows the pivots used.
 4. Hold, break (engulfing + full-bodied), engulfing, approaching, range, and RSI-extension signals behave per §6.4 and are unit-tested.
 5. Every enabled strategy in `strategies.yaml` is evaluated; editing the YAML (e.g., changing `signals_any`, adding a new strategy, disabling one) changes results with **no code changes**; `scanner validate` catches mistakes.
-6. Each matched strategy shows its manual ORATS checklist and other manual checks verbatim.
+6. (Removed 2026-10-17: cards no longer show manual checklists.)
 7. Alert helper block shows trigger/invalidation prices for each candidate and watch item.
 8. `--as-of` replay and `scanner replay` work without look-ahead; `signals_log.csv` is produced.
 9. No code path touches ORATS, option chains, fundamentals, earnings, or macro data. (Exception, approved
@@ -548,149 +528,62 @@ scanner cache refresh|info
 | **OQ-7** | **Price basis vs. TradingView.** | Split-adjusted, not dividend-adjusted; verify against TradingView on sample symbols. |
 | **OQ-8** | **Relative-strength trend on ratio series.** | Same pivot logic applied to ratio of closes. |
 | **OQ-9** | **Strategy technical mappings** in Appendix A are inferred from the playbook's technical cues (e.g., Bull Call Spread entry = bullish engulfing or resistance break). | Seeded in `strategies.yaml`; the owner edits freely. |
-| **OQ-10** | **PMCC/PMCP/Wheel/Long Stock technical rules.** The playbook leans on fundamentals/ORATS; technical cues are thin. | Trend/hold-based rules in Appendix A; fundamentals/ORATS remain manual checks. |
+| **OQ-10** | **PMCC/PMCP/Wheel/Long Stock technical rules.** The playbook leans on fundamentals/ORATS; technical cues are thin. | Trend/hold-based rules in Appendix A; fundamentals/ORATS stay outside the scanner. |
 
 ---
 
 ## Appendix A — Seed `strategies.yaml`
 
-Seeded from the owner's playbook. Display-only text is transcribed from the playbook (including its terminology). Technical rules are the editable parts and reflect OQ-9/OQ-10. Dollar/percent ranges are shown as written.
+Seeded from the owner's playbook. Only the technical rules are kept (they reflect OQ-9/OQ-10); the playbook's non-technical text was removed on 2026-10-17.
 
 ```yaml
 # strategies.yaml — the strategy playbook. Edit freely; run `scanner validate` after changes.
 # Evaluated by the scanner:  bias, technical
-# Display-only (shown on cards): construction, orats_checklist, other_manual_checks, plan
+# Any other key you add (e.g. notes:) is shown on cards as written and never evaluated.
 
 - id: bull_call_spread
   name: Bull Call Spread
   enabled: true
-  status: complete
   bias: bullish
   technical:
     trend: [any]
     signals_all: [resistance_break]
     not_extended: auto            # bullish → not extended up (RSI < 70)
     alignment: soft
-  construction:
-    - "Buy 0.4–0.6Δ call 10–45 DTE"
-    - "Sell 1–4 strikes higher call, same expiration"
-  orats_checklist:
-    - "IVR < 65 (don't buy expensive premium)"
-  other_manual_checks:
-    - "Asymmetric upside driven by some macro narrative that market is not properly pricing"
-    - "No earnings"
-    - "Verify macro events"
-    - "Price isn't 'extended' (confirm on chart)"
-  plan:
-    max_bp_pct: 10
-    profit_target: "10 – 200% (debit paid)"
-    stop_loss: "10 – 50%"
-    management:
-      - "Exit if 2-bar close below pre-defined support level: {nearest_support}"
-      - "Exit no later than Wed before expiration"
 
 - id: bear_put_spread
   name: Bear Put Spread
   enabled: true
-  status: complete
   bias: bearish
   technical:
     trend: [any]
     signals_all: [support_break]
     not_extended: auto            # bearish → not extended down (RSI > 30)
     alignment: soft
-  construction:
-    - "Buy 0.4–0.6Δ put 10–45 DTE"
-    - "Sell 1–4 strikes lower put, same expiration"
-  orats_checklist:
-    - "IVR < 65 (don't buy expensive premium)"
-  other_manual_checks:
-    - "Asymmetric downside driven by some macro narrative that market is not properly pricing"
-    - "No earnings"
-    - "Verify macro events"
-    - "Price isn't 'extended' (confirm on chart)"
-  plan:
-    max_bp_pct: 10
-    profit_target: "10 – 200% (debit paid)"
-    stop_loss: "10 – 50%"
-    management:
-      - "Exit if 2-bar close above pre-defined resistance level: {nearest_resistance}"
-      - "Exit no later than Wed before expiration"
 
 - id: bull_put_spread
   name: Bull Put Spread
   enabled: true
-  status: complete
   bias: non_bearish
   technical:
     trend: [uptrend, range]
     signals_any: [support_hold]
     not_extended: none
     alignment: soft
-  construction:
-    - "Sell a ~0.3Δ put 5–20 DTE"
-    - "Buy a put one strike lower, same expiration"
-    - "Aim to collect ~1/3 strike width in premium"
-  orats_checklist:
-    - "IVR > 50 (IV elevated)"
-    - "ivHvXernRatio > 1 (IV elevated relative to HV)"
-    - "orFcst20d / orIvXern20d < 1 (forecasting muted HV vs. IV)"
-    - "stkPxChng1m > 0"
-    - "stkPxChng1wk > 0"
-    - "confidence > 80"
-    - "50 < stockPrice < 500"
-    - "Confirm D/F/S edge (Distribution / Forecast / Smooth-market vols)"
-  other_manual_checks:
-    - "No earnings within DTE horizon"
-    - "Check for any macro events"
-  plan:
-    max_bp_pct: 5
-    profit_target: "30 – 75%"
-    stop_loss: "35 – 100% (credit received)"
-    management:
-      - "Exit if 2-bar close below short strike"
-      - "Exit no later than Wed before expiration"
-      - "Utilize time-based exits (win/lose/draw)"
 
 - id: bear_call_spread
   name: Bear Call Spread
   enabled: true
-  status: complete
   bias: non_bullish
   technical:
     trend: [downtrend, range]
     signals_any: [resistance_hold]
     not_extended: none
     alignment: soft
-  construction:
-    - "Sell a ~0.3Δ call 5–20 DTE"
-    - "Buy a call one strike higher, same expiration"
-    - "Aim to collect ~1/3 strike width in premium"
-  orats_checklist:
-    - "IVR > 50 (IV elevated)"
-    - "ivHvXernRatio > 1 (IV elevated relative to HV)"
-    - "orFcst20d / orIvXern20d < 1 (forecasting muted HV vs. IV)"
-    - "stkPxChng1m < 0"
-    - "stkPxChng1wk < 0"
-    - "confidence > 80"
-    - "50 < stockPrice < 500"
-    - "Confirm D/F/S edge (Distribution / Forecast / Smooth-market vols)"
-  other_manual_checks:
-    - "No earnings within DTE horizon"
-    - "Check for any macro events"
-  plan:
-    max_bp_pct: 5
-    profit_target: "30 – 75%"
-    stop_loss: "35 – 100% (credit received)"
-    management:
-      - "Exit if 2-bar close above short strike"
-      - "Exit no later than Wed before expiration"
-      - "Utilize time-based exits (win/lose/draw)"
 
 - id: neutral_calendar
   name: Neutral Calendar
   enabled: true
-  status: complete
   bias: neutral
   technical:
     trend: [range]
@@ -698,197 +591,62 @@ Seeded from the owner's playbook. Display-only text is transcribed from the play
     signals_any: []
     not_extended: none
     alignment: ignore
-  construction:
-    - "Sell 0.45–0.55Δ put (call) 10–30 DTE"
-    - "Buy identical strike put (call) +7 DTE"
-  orats_checklist:
-    - "exErnIv20d / fexErn30_20 > 1 (20d IV elevated vs 20–30d forward IV)"
-    - "orFcst20d / orIvXern20d < 1 (forecasting lower HV vs. IV)"
-    - "10 < IVR < 60 (low to mid IV rank)"
-    - "avgOptVolu20d > 1000 (liquidity)"
-    - "confidence > 80"
-    - "-0.05 < stkPxChng1wk / stockPrice < 0.05 (neutral trading range)"
-    - "50 < stockPrice < 350"
-    - "wksNextErn > 4"
-    - "Confirm D/F/S edge (Distribution / Forecast / Smooth-market vols)"
-  other_manual_checks:
-    - "No earnings within DTE horizon"
-    - "Check for any macro events"
-    - "Wait to see how it closes on the day"
-  plan:
-    max_bp_pct: 10
-    profit_target: "20 – 100%"
-    stop_loss: "10 – 50%"
-    management:
-      - "Utilize time-based exits (win/lose/draw)"
-      - "2-bar close through pre-defined support/resistance: support {nearest_support}, resistance {nearest_resistance}"
 
 - id: pmcc
   name: PMCC (Poor Man's Covered Call)
   enabled: true
-  status: complete
   bias: non_bearish
   technical:
     trend: [uptrend]
     signals_any: [support_hold, bullish_engulfing]
     not_extended: up
     alignment: soft
-  construction:
-    - "Buy 0.5–0.6Δ call ~60 DTE"
-    - "Sell same strike or slightly further OTM call 7–14 DTE"
-  orats_checklist:
-    - "0 < ForwardPEratio / PEratio < 1 (expected greater future earnings)"
-    - "exErnIv30d / fexErn90_30 > 1 (30d IV elevated vs. 30–90d forward IV)"
-    - "AnalystRating > 3.5 (buy rating)"
-    - "ReturnOnEquityTTM > 0 (currently profitable)"
-    - "20 < stockPrice < 200"
-    - "confidence > 80"
-    - "10 < ivRank1y < 60"
-    - "wksNextErn > 4"
-    - "0 < assetType < 3 (stocks only)"
-    - "mktCap > 1000000 (sizeable companies only)"
-    - "stkPxChng1m > 0 (positive drift last 1m)"
-    - "Confirm D/F/S edge (Distribution / Forecast / Smooth-market vols)"
-  other_manual_checks:
-    - "Strong or improving fundamental narrative using Fundamental Checklist"
-    - "Wait to see how it closes on the day"
-  plan:
-    max_bp_pct: 25
-    profit_target: "Roll short call at 50 – 75% max profit (premium collected); close entire position at 15 – 35% profit (initial debit paid)"
-    stop_loss: "20 – 50%"
-    management:
-      - "Roll short call no later than Wednesday of expiration week"
-      - "Manage strictly on % gain/loss (not off the chart)"
-      - "If short call gets filled following stock price decrease (outright long calls remaining): exit if 2-bar break below key support ({nearest_support}); close if overall profit target reached; roll to new expiration"
 
 - id: pmcp
   name: PMCP (Poor Man's Covered Put)
   enabled: true
-  status: partial
   bias: non_bullish
   technical:
     trend: [downtrend]
     signals_any: [resistance_hold, bearish_engulfing]
     not_extended: down
     alignment: soft
-  construction:
-    - "Buy 0.5–0.6Δ put ~60 DTE"
-    - "Sell slightly further OTM put 7–14 DTE"
-  orats_checklist:
-    - "stkPxChng6m ratio to Best ETF_C < 0.99 (underperforming ETF last 6m)"
-    - "exErnIv30d / fexErn90_30 > 1 (30d IV elevated vs. 30–90d forward IV)"
-    - "Confirm D/F/S edge (Distribution / Forecast / Smooth-market vols)"
-  other_manual_checks:
-    - "Weak or deteriorating fundamental narrative using Fundamental Checklist"
-    - "Wait to see how it closes on the day"
-  plan:
-    max_bp_pct: 15
-    profit_target: "Roll short put at 50 – 75% max profit (premium collected); close entire position at 15 – 35% profit (initial debit paid)"
-    stop_loss: "20 – 50%"
-    management:
-      - "Roll short put no later than Wednesday of expiration week"
-      - "Manage strictly on %"
 
 - id: wheel
   name: Wheel (Cycle-Recycle)
   enabled: true
-  status: complete
   bias: non_bearish
   technical:
     trend: [uptrend, range]
     signals_any: [support_hold]
     not_extended: none
     alignment: soft                # owner favors rising relative strength vs sector ETF
-  construction:
-    - "Sell a cash-secured 0.3–0.5Δ put 7–21 DTE"
-    - "Buy a protective put 30–60 DTE to retain at least 25% of credit on short put"
-    - "If assigned, sell a 0.3–0.5Δ call 7–21 DTE"
-  orats_checklist:
-    - "0 < ForwardPEratio / PEratio < 1 (expected greater future earnings)"
-    - "AnalystRating > 3.5 (avg buy rating)"
-    - "ReturnOnEquityTTM > 0 (currently profitable)"
-    - "5 < stockPrice < 30"
-    - "confidence > 70 (liquidity)"
-    - "ivRank1y > 35 (elevated IV)"
-    - "wksNextErn > 4 (no upcoming earnings)"
-    - "orFcst20d / orIvXern20d < 1.02 (forecasted HV <= current IV)"
-    - "orIvFcst20d / orIvXern20d < 1.02 (forecasted IV <= current IV)  # threshold assumed; confirm"
-    - "orHvXern20d / orIvXern20d < 1.02 (realized HV <= current IV)"
-    - "0 < assetType < 3 (stocks only)"
-    - "mktCap > 1bn (large companies only)"
-    - "stkPxChng1m > 0 (positive drift last 1m)"
-    - "Confirm D/F/S edge (Distribution / Forecast / Smooth-market vols)"
-  other_manual_checks:
-    - "BE CLEAR ON OBJECTIVE: Skate (collect premium) or Trade (assignment)?"
-    - "Strong or improving fundamental narrative using Fundamental Checklist"
-    - "Rising relative strength vs. sector ETF"
-    - "Wait to see how it closes on the day"
-  plan:
-    max_bp_pct: 25
-    profit_target: "Roll at 50 – 75% premium collected on short put"
-    stop_loss: "Skate: 50% – 200% loss of original credit received. Trade (assignment): no %-based stop loss."
-    management:
-      - "Skate: close if 2-bar close below short strike; roll Wednesday before expiration"
-      - "Trade: roll Wednesday before expiration if OTM; if ITM, take assignment"
 
 - id: ted_calendar
   name: TED Calendar
-  enabled: false                   # depends on earnings dates (out of scope for the scanner)
-  status: partial
+  enabled: false                   # no technical rules; not evaluated
   bias: neutral
   technical: {}                    # none
-  construction:
-    - "Sell one ~0.5Δ put for the expiration after earnings"
-    - "Buy same strike put for the following expiration"
-  orats_checklist:
-    - "WIP"
-  other_manual_checks:
-    - "Earnings-driven; verify earnings date manually"
-  plan:
-    max_bp_pct: 5
-    profit_target: "Sell day after earnings"
-    stop_loss: "Sell day after earnings"
-    management:
-      - "Sell day after earnings"
 
 - id: flyagonal
   name: Flyagonal
   enabled: false
-  status: stub
   bias: neutral
   technical: {}
-  construction: []
-  orats_checklist: []
-  other_manual_checks: []
-  plan: {}
 
 - id: long_stock
   name: Long Stock
   enabled: true
-  status: partial
   bias: bullish
   technical:
     trend: [uptrend]
     signals_any: [support_hold]
     not_extended: up
     alignment: soft                # owner favors rising relative strength vs sector ETF
-  construction:
-    - "Buy shares of stock outright"
-  orats_checklist: []
-  other_manual_checks:
-    - "Strong or improving fundamental narrative using Fundamental Checklist"
-    - "Rising relative strength vs. sector ETF"
-    - "Enter at a good price"
-  plan:
-    max_bp_pct: 5
-    profit_target: "Varies"
-    stop_loss: "Varies"
-    management:
-      - "Varies"
 ```
 
 ## Appendix B — What Changed vs. v1
 
 - **Removed:** ORATS API, all ORATS-field evaluation, option chains/strikes/credit calculations, fundamentals, earnings gates, macro event file, Pine Script, alert automation.
-- **Kept (as manual-only text):** ORATS criteria, fundamental/earnings/macro checks (on strategy cards).
+- **Removed 2026-10-17:** the manual-only text kept in v2.0 (ORATS criteria, fundamental/earnings/macro checks, construction, plan, `status`); the config is technical parameters only.
 - **Added:** SMA/pivot-based support & resistance definitions, engulfing + full-body break rule, signal vocabulary, watch list with TradingView alert levels, HTML report with charts, replay + validation against owner's chart reads, editable single-file strategy playbook, scheduler-ready CLI.

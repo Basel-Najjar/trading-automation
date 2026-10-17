@@ -125,7 +125,7 @@ def explain(
 ) -> None:
     """Print every rule evaluated for (symbol, strategy) with evidence and why it matched or not."""
     from scanner.pipeline import run_scan
-    from scanner.scoring import fill_placeholders, score_candidate
+    from scanner.scoring import score_candidate
     from scanner.strategies import evaluate_strategy, watch_nears
 
     cfg = _load(config_dir, quiet=True)
@@ -148,7 +148,7 @@ def explain(
     verdict = {"true": "MATCH", "false": "NO MATCH", "PENDING_CLOSE": "PENDING_CLOSE (depends on the forming bar)"}
     out(f"{sym} × {st.name} ({st.id}) — as of {sa.as_of}{' (provisional bar)' if sa.provisional else ''}")
     if not st.active:
-        out(f"NOTE: strategy is {'a stub' if st.status == 'stub' else 'disabled'}; evaluated anyway for explanation.")
+        out("NOTE: strategy is disabled; evaluated anyway for explanation.")
     out(f"Result: {verdict[ev.status.value]}")
     out(f"Close {sa.bars.close[t]:.2f} · ATR {sa.bars.atr[t]:.2f} · RSI {sa.bars.rsi[t]:.1f}")
     out("")
@@ -194,10 +194,6 @@ def explain(
         out("Alert helper:")
         for a in c.alerts:
             out(f"  {a.label:<20} {a.price:>10.2f}  {a.meaning}")
-        mgmt = st.plan.get("management") or []
-        for m in mgmt if isinstance(mgmt, list) else [mgmt]:
-            if "{" in str(m):
-                out(f"  plan: {fill_placeholders(str(m), sa, s)}")
     raise typer.Exit(0)
 
 

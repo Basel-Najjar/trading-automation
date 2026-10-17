@@ -2,11 +2,11 @@
 
 A daily-bar technical scanner for a personal watchlist. It finds support/resistance holds and breaks, trend and range
 states, and RSI extension, using the rules in [requirements.md](requirements.md). Each setup is matched to the strategies in
-`config/strategies.yaml`. The output is a ranked shortlist in a self-contained HTML report, with charts, evidence, manual
-ORATS/fundamental checklists and copy-ready TradingView alert prices.
+`config/strategies.yaml`. The output is a ranked shortlist in a self-contained HTML report, with charts, evidence, score
+breakdowns and copy-ready TradingView alert prices.
 
-The scanner is the **discovery layer only**. It never touches ORATS, option chains, fundamentals, earnings or macro data;
-those stay as manual checklist items on each card. Data is free daily OHLCV from `yfinance`.
+The scanner is the **discovery layer only**. It never touches ORATS, option chains, fundamentals, earnings or macro data,
+and the config holds technical parameters only. Data is free daily OHLCV from `yfinance`.
 
 ## Setup
 
@@ -49,31 +49,51 @@ scanner cache info | scanner cache refresh
 ### Streamlit app
 
 ```
-uv run streamlit run src/scanner/app.py      # run from the repository root
+uv run streamlit run src/scanner/app.py      # run from the repository root (reads .streamlit/config.toml)
 ```
 
-- **Sidebar.** Pick a date (default today) and optionally force a data refresh, then press **Run analysis**. Every run
-  scans all enabled symbols and all active strategies. All filtering happens after the scan.
-- **Top symbols.** Cards show the best strategy's candidate score (0–100) and its rules met. Symbols with a full
-  match come first, highest score first. Symbols with no candidate show "—" and follow, ranked by share of rules met
-  (PENDING_CLOSE rules count as not met). A slider sets the number of cards (default 10). Hover a card's symbol
-  line or **View** button for the ticker description.
+The Results tab goes from high level to detail: overview, then the list, then one setup, then its evidence.
+
+- **Run.** At the top, pick a session date (default today), optionally tick **Force refresh**, then press **Run
+  analysis**. Every run scans all enabled symbols and all active strategies. All filtering happens after the scan.
+- **Overview band.** It shows the session (with a *prior session* or *provisional bar* badge), the benchmark's trend and
+  1m/3m returns, and the number of setups. **Watch list** opens the near-setups; pick a row to open that symbol.
+  **Skipped / warnings** lists what was left out. The **Sector** pills show each sector ETF's trend, 1-month return
+  and number of symbols with a setup. Picking one filters the list.
+- **Filters.** These are **By symbol / By setup**, **Bias** (Bullish = bullish + not bearish, Bearish = bearish + not
+  bullish, Neutral), **Strategy**, **Symbol** and **Include near misses**. Without near misses, only full matches
+  are listed.
+- **Top five and the list.** The five best symbols appear as cards; **Open** shows one. Below them, the list has
+  one row per symbol (its best setup, plus "+N" other matching strategies) or one row per setup. Pick a row to open
+  it in the setup pane beside the list, which stays in view while you scroll.
+- **Score tiers.** A score (0–100) belongs to a symbol × strategy pair. Tier **A** is the top 20% of this run's
+  candidate scores, **B** the next 40%, **C** the rest. Tiers only compare setups within one run.
 - **Ticker descriptions.** The name is your `notes` from `universe.csv`, or else the yfinance name. The summary is
-  the yfinance business summary. Both are display only and cached in `cache/profiles.json` for 30 days; **Force data
+  the yfinance business summary. Both are display only and cached in `cache/profiles.json` for 30 days; **Force
   refresh** refetches them.
-- **Details and strategies.** Click **View** on a card to show that symbol's best strategy right below the cards,
-  with that symbol's strategies (sorted by % of rules met) underneath. Click a strategy row to switch the details
-  above to it. The details show the ticker description, rule evidence, an interactive Plotly chart, alert
-  prices, nearest levels, score breakdown, plan and checklists. In the chart you can zoom, pan back through the full
-  history, hover, and click legend entries to hide levels. Double-click resets the view.
-- **Criteria tab.** Shows the exact logic each strategy is scanned with, built from `strategies.yaml`,
-  `settings.yaml` (per-strategy overrides applied) and the signal registry. Rules appear in the same order and with
-  the same names as the rule list in Results. **Edit rules** on a strategy sets `enabled` and the technical rules
+- **Setup pane.** The header shows the symbol, name, close, change, RSI, ATR and sector. Below it is one Plotly
+  chart per symbol, opening on the last 60 bars, with the signal levels and markers of all its strategies. You can
+  zoom, pan back through the full history, and use **Legend** to list or hide levels. Buttons beside it overlay
+  the symbol's sector ETF, the benchmark and the ETF/benchmark ratio (the series sector flow is read from), each
+  on its own right-hand axis in its own colour; they toggle inside the chart, so they never reload it or reset the
+  zoom. Strategy pills under the chart
+  switch between that symbol's strategies (matches first, with score and tier; others with rules met). Switching
+  leaves the chart and its zoom as they are and updates only what follows: score, rules met, trend and flow, one
+  plain line per rule, and the **price ladder**, which lists alert prices (including invalidation) and the last
+  close, highest first. A near miss shows its trigger prices, or the
+  nearest zones if nothing is close. **Criteria** jumps to the strategy's logic; **Export** downloads the HTML report
+  for this setup.
+- **Evidence tabs.** **Why** has the score breakdown, the signals that fired, the trend and flow reasoning, and the
+  raw rule evidence. **Levels** has the nearest levels. **About** has the full business summary.
+- **Criteria tab.** Each strategy shows a one-line recipe (trend, required and trigger signals, extension, flow).
+  **Show logic** has the exact logic it is scanned with, built from `strategies.yaml`, `settings.yaml` (per-strategy
+  overrides applied) and the signal registry, with its signal parameters in one table. The **Strategy** picker shows
+  one strategy; the setup pane's **Criteria** button opens it there. **Edit rules** on a strategy sets `enabled` and the technical rules
   (`trend`, `signals_all`, `signals_any`, `not_extended`, `alignment`) from dropdowns that offer only valid values.
   Saving validates first, then rewrites only that strategy's lines in `strategies.yaml`; comments and everything else
   are kept. Strategies that differ from `strategies.default.yaml` show a **modified** badge, and **Restore defaults**
   puts the original back. Saving or restoring clears the current results.
-- **Deep dive.** Pick symbols and/or strategies to filter the full HTML report. Picked symbols show every picked
+- **Report tab.** The full HTML report. Pick symbols and/or strategies to filter it. Picked symbols show every picked
   strategy, including rules that did not match. **Export report** downloads the report as shown. The app does not
   write to `reports/`.
 - **Config tab.** Edit symbols, type, sector ETF, enabled, notes and the benchmark. **Save config** validates the
@@ -236,7 +256,6 @@ Residual differences against TradingView:
 - **OQ-2 to OQ-5, parameters:** tune `zone_atr_mult`, `pivot_window`, the range tolerance and trendline settings
   against your chart reads.
 - **OQ-9/OQ-10, seeded technical rules:** these were inferred from the playbook; edit freely.
-- **Wheel checklist:** the `orIvFcst20d` threshold is marked "assumed; confirm" in Appendix A.
 
 *Automated technical screening based on the owner's predefined rules; not investment advice. Manual validation
-(volatility, fundamentals, events, macro) is required before any trade.*
+is required before any trade.*

@@ -184,17 +184,6 @@ Components that are `mixed` or `n/a` count as neutral. The label is:
 - `with_flow` if none oppose and at least one agrees;
 - `mixed` otherwise.
 
-## Plan placeholders
-
-The display-only plan text may contain these placeholders. They are replaced on each candidate card:
-
-| Placeholder | Replaced with |
-|---|---|
-| `{nearest_support}` | The zone low of the nearest support below the close, projected one bar ahead, with its type and level, e.g. `$178.20 (sma50 zone low; level $179.10)`. |
-| `{nearest_resistance}` | The zone high of the nearest resistance above the close, in the same form. |
-
-If no such level exists the text reads `n/a (no level found)`.
-
 ## Score (0–100)
 
 A score belongs to one (symbol, strategy) pair. It is the weighted sum of nine components, each scaled to 0–1.

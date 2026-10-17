@@ -87,7 +87,6 @@ td.num, th.num { white-space: nowrap; text-align: right; font-variant-numeric: t
 .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin: 0 4px 0 10px; }
 ul.check { list-style: none; padding-left: 0; margin: 4px 0; }
 ul.check li { margin: 2px 0; }
-ul.check label { cursor: pointer; }
 .strategy { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 12px; }
 .alerts { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; }
 .alerts td { padding: 4px 6px; }
@@ -266,7 +265,7 @@ footer { margin: 34px 0 20px; font-size: 12px; color: var(--muted); border-top: 
 {% for st in card.strategies %}
 <div class="strategy">
 <div><span class="chip {{ st.bias }}">{{ st.name }}</span> <span class="tag {{ st.match }}">{{ "MATCH" if st.match == "true" else st.match }}</span>
-<span class="muted">{{ st.bias }} · status {{ st.status }}{% if st.cand %} · score {{ st.cand.score|num(1) }} · #{{ st.cand.strategy_rank }} in strategy{% endif %}</span>
+<span class="muted">{{ st.bias }}{% if st.cand %} · score {{ st.cand.score|num(1) }} · #{{ st.cand.strategy_rank }} in strategy{% endif %}</span>
 {% if st.cand and st.cand.stretched %}<span class="tag stretched">stretched (&gt; {{ s.signals.chase_atr }} ATR beyond zone)</span>{% endif %}</div>
 {% if st.description %}<div class="muted">{{ st.description }}</div>{% endif %}
 <table>
@@ -274,17 +273,7 @@ footer { margin: 34px 0 20px; font-size: 12px; color: var(--muted); border-top: 
 <tbody>
 {% for r in st.rules %}<tr><td>{{ r.rule }}</td><td><span class="tag {{ r.status.value }}">{{ r.status.value }}</span></td><td>{{ r.detail }}{% for e in r.evidence %}<div class="evidence">{{ e }}</div>{% endfor %}</td></tr>{% endfor %}
 </tbody></table>
-<div class="cols">
-<div>
-{% if st.orats %}<h4>ORATS checklist (manual)</h4><ul class="check">{% for item in st.orats %}<li><label><input type="checkbox"> {{ item }}</label></li>{% endfor %}</ul>{% endif %}
-{% if st.manual %}<h4>Other manual checks</h4><ul class="check">{% for item in st.manual %}<li><label><input type="checkbox"> {{ item }}</label></li>{% endfor %}</ul>{% endif %}
-</div>
-<div>
-{% if st.construction %}<h4>Construction</h4><ul>{% for item in st.construction %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
-{% if st.plan %}<h4>Plan</h4><ul>{% for key, val in st.plan %}<li><b>{{ key }}:</b> {% if val is string or val is number %}{{ val }}{% else %}<ul>{% for v in val %}<li>{{ v }}</li>{% endfor %}</ul>{% endif %}</li>{% endfor %}</ul>{% endif %}
 {% for key, val in st.extra.items() %}<div><b>{{ key }}:</b> {{ val }}</div>{% endfor %}
-</div>
-</div>
 {% if st.cand %}
 <details><summary>Score breakdown ({{ st.cand.score|num(1) }})</summary>
 <table><thead><tr><th>Component</th><th class="num">Raw (0–1)</th><th class="num">Weight</th><th class="num">Points</th><th>Note</th></tr></thead>
@@ -334,7 +323,7 @@ footer { margin: 34px 0 20px; font-size: 12px; color: var(--muted); border-top: 
 {% if errors %}<h4>Errors</h4><ul>{% for d in errors %}<li><b>{{ d.symbol or "—" }}</b> [{{ d.stage }}] {{ d.message }}</li>{% endfor %}</ul>{% endif %}
 {% if res.skipped %}<h4>Skipped symbols</h4><ul>{% for sym, why in res.skipped %}<li><b>{{ sym }}</b>: {{ why }}</li>{% endfor %}</ul>{% endif %}
 {% if warnings %}<h4>Data-quality warnings</h4><ul>{% for d in warnings %}<li><b>{{ d.symbol or "—" }}</b> [{{ d.stage }}] {{ d.message }}</li>{% endfor %}</ul>{% endif %}
-{% if res.strategies_skipped %}<h4>Disabled / stub strategies</h4><ul>{% for sid, why in res.strategies_skipped %}<li>{{ strategy_names.get(sid, sid) }} — {{ why }}</li>{% endfor %}</ul>{% endif %}
+{% if res.strategies_skipped %}<h4>Disabled strategies</h4><ul>{% for sid, why in res.strategies_skipped %}<li>{{ strategy_names.get(sid, sid) }} — {{ why }}</li>{% endfor %}</ul>{% endif %}
 {% if infos %}<details><summary>Info ({{ infos|length }})</summary><ul>{% for d in infos %}<li><b>{{ d.symbol or "—" }}</b> [{{ d.stage }}] {{ d.message }}</li>{% endfor %}</ul></details>{% endif %}
 </section>
 

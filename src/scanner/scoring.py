@@ -1,4 +1,4 @@
-"""Scoring (§6.8), ranking, watch list (§6.7), alert helper and plan placeholders (§7.4).
+"""Scoring (§6.8), ranking, watch list (§6.7) and alert helper.
 
 Each score component is normalised to 0–1 and multiplied by its weight (weights sum to 100). A score belongs to
 one (symbol, strategy) pair: the signal is scored against the best signal that strategy allows, trend_fit
@@ -8,8 +8,6 @@ component table is stored on every candidate so the ranking can be challenged.
 """
 
 from __future__ import annotations
-
-import re
 
 import numpy as np
 
@@ -226,7 +224,7 @@ def rank(cands: list[Candidate]) -> list[Candidate]:
 
 
 # ----------------------------------------------------------------------------------------------
-# Alerts and placeholders
+# Alerts
 # ----------------------------------------------------------------------------------------------
 
 
@@ -290,23 +288,6 @@ def build_alerts(sig: SignalResult | None, sa: SymbolAnalysis, s) -> list[AlertP
             seen.add(key)
             uniq.append(a)
     return uniq
-
-
-_PLACEHOLDER = re.compile(r"\{(nearest_support|nearest_resistance)\}")
-
-
-def fill_placeholders(text: str, sa: SymbolAnalysis, s) -> str:
-    def _sub(m: re.Match) -> str:
-        rows = sa.nearest_support if m.group(1) == "nearest_support" else sa.nearest_resistance
-        if not rows:
-            return "n/a (no level found)"
-        lv = rows[0]["level"]
-        _, zlo, zhi = _zone_next(lv, sa, s)
-        if m.group(1) == "nearest_support":
-            return f"${zlo:.2f} ({lv.label} zone low; level ${lv.value(sa.last_idx):.2f})"
-        return f"${zhi:.2f} ({lv.label} zone high; level ${lv.value(sa.last_idx):.2f})"
-
-    return _PLACEHOLDER.sub(_sub, text)
 
 
 # ----------------------------------------------------------------------------------------------

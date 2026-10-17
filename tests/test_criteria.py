@@ -48,7 +48,7 @@ def test_not_extended(cfg):
     assert f"`rsi_overbought` = **{cfg.settings.indicators.rsi_overbought:g}**" in ne.summary
 
 
-def test_stub_strategy_has_no_rules(cfg):
+def test_disabled_strategy_without_rules_has_no_criteria(cfg):
     c = next(c for c in strategy_criteria(cfg) if c.strategy.id == "flyagonal")
     assert not c.active and c.rules == [] and c.outcome == []
 
