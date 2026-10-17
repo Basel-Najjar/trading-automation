@@ -1,4 +1,5 @@
-"""View model for the Streamlit app: rank symbols by % of strategy rules met, filter a finished scan, detail panel.
+"""View model for the Streamlit app: rank symbols by % of strategy rules met, filter a finished scan, detail panel,
+ticker descriptions.
 
 Pure functions over a `RunResult` (no Streamlit), so they are unit-tested like the rest of the scanner.
 """
@@ -7,13 +8,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
-from functools import cache
-from importlib import resources
 
-from scanner.charts import chart_levels, svg_chart
+from scanner.charts import chart_levels
 from scanner.config import Config
+from scanner.data import Profile
 from scanner.models import Candidate, Tri
 from scanner.pipeline import RunResult
+from scanner.plotly_chart import price_figure
 from scanner.report import _plan_items, level_dict
 from scanner.strategies import StrategyEval, watch_nears
 
@@ -103,17 +104,41 @@ def filtered_result(res: RunResult, symbols: list[str] | None, strategy_ids: lis
                    focus_symbols=list(symbols) if symbols else None)
 
 
-@cache
-def _report_css() -> str:
-    text = (resources.files("scanner") / "templates" / "scan.html.j2").read_text(encoding="utf-8")
-    m = re.search(r"<style>.*?</style>", text, re.DOTALL)
-    return m.group(0) if m else ""
+def _clip_sentences(text: str, limit: int) -> str:
+    """`text` cut at the last sentence end within `limit` characters (or a word boundary, with an ellipsis)."""
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    end = max(head.rfind(". "), head.rfind("! "), head.rfind("? "))
+    if end > limit // 3:
+        return head[:end + 1]
+    return head.rsplit(" ", 1)[0] + "…"
 
 
-def chart_page(svg: str) -> str:
-    """A standalone page for one SVG chart, styled with the report's CSS (light/dark aware)."""
-    return (f'<!doctype html><html><head><meta charset="utf-8">{_report_css()}</head>'
-            f'<body style="margin:0;background:var(--panel)">{svg}</body></html>')
+def ticker_description(cfg: Config, profiles: dict[str, Profile], symbol: str) -> tuple[str, str] | None:
+    """(name, summary) for a symbol, or None. The name is your universe.csv note if set, else the yfinance profile
+    name; the summary is the yfinance business summary."""
+    entry = next((u for u in cfg.universe if u.symbol == symbol), None)
+    p = profiles.get(symbol) or Profile()
+    name = (entry.notes.strip() if entry is not None else "") or p.name
+    if not (name or p.summary):
+        return None
+    return name, p.summary
+
+
+def card_tooltip(desc: tuple[str, str] | None, limit: int = 300) -> str | None:
+    """Short hover text for a symbol card: the name in bold, then the summary up to about `limit` characters."""
+    if desc is None:
+        return None
+    name, summary = desc
+    text = _clip_sentences(summary, limit)
+    return f"**{name}**\n\n{text}" if name and text else (f"**{name}**" if name else text)
+
+
+def split_summary(summary: str, sentences: int = 2) -> tuple[str, str]:
+    """(first `sentences` sentences, the rest) for the detail header and its "About" expander."""
+    parts = re.split(r"(?<=[.!?])\s+", summary.strip())
+    return " ".join(parts[:sentences]), " ".join(parts[sentences:])
 
 
 def detail_view(res: RunResult, cfg: Config, symbol: str, strategy_id: str) -> dict:
@@ -126,7 +151,7 @@ def detail_view(res: RunResult, cfg: Config, symbol: str, strategy_id: str) -> d
     sigs = cand.signals if cand else ev.qualifying
     sig_levels = [x.level for x in sigs if x.level is not None]
     levels = chart_levels(sa, sig_levels)
-    chart = svg_chart(sa, levels, [x.bar_idx for x in sigs], s.report.chart_bars, k,
+    chart = price_figure(sa, levels, [x.bar_idx for x in sigs], s.report.chart_bars, k,
                       s.indicators.rsi_overbought, s.indicators.rsi_oversold)
     lv_rows = [level_dict(r["level"], sa, k) for r in sa.nearest_resistance[::-1] + sa.nearest_support]
     if cand:

@@ -326,3 +326,62 @@ def recent_gaps(df: pd.DataFrame, atr_period: int, max_atr: float, lookback: int
         if g / a > max_atr:
             out.append((df.index[t].date(), float(g / a), float(g / c[t - 1] * 100)))
     return out
+
+
+# ----------------------------------------------------------------------------------------------
+# Ticker profiles (display only: the app's card tooltips and detail header)
+# ----------------------------------------------------------------------------------------------
+
+PROFILE_FILE = "profiles.json"
+PROFILE_TTL_DAYS = 30
+
+
+@dataclass
+class Profile:
+    name: str = ""
+    summary: str = ""
+
+
+def _yf_profile(symbol: str) -> Profile:
+    import yfinance as yf
+
+    info = yf.Ticker(symbol).info or {}
+    return Profile(str(info.get("longName") or info.get("shortName") or ""), str(info.get("longBusinessSummary") or ""))
+
+
+def fetch_profiles(symbols: list[str], cache_dir: Path, *, refresh: bool = False, now: datetime | None = None,
+                   ttl_days: int = PROFILE_TTL_DAYS, fetch: Callable[[str], Profile] = _yf_profile,
+                   workers: int = 8) -> dict[str, Profile]:
+    """Name and business summary per symbol, cached in `<cache_dir>/profiles.json` for `ttl_days`.
+
+    Only missing or stale entries are fetched (in parallel). A failed fetch is cached as an empty profile so it is not
+    retried on every run; `refresh` ignores the cache.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    now = now or datetime.now()
+    path = Path(cache_dir) / PROFILE_FILE
+    try:
+        cached = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cached = {}
+    cutoff = (now - timedelta(days=ttl_days)).isoformat()
+    stale = [s for s in symbols if refresh or s not in cached or cached[s].get("fetched", "") < cutoff]
+
+    def _one(sym: str) -> tuple[str, Profile]:
+        try:
+            return sym, fetch(sym)
+        except Exception as e:  # a description is optional; never fail the app over it
+            log.info("profile fetch failed for %s: %s", sym, e)
+            return sym, Profile()
+
+    if stale:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for sym, p in pool.map(_one, stale):
+                cached[sym] = {"name": p.name, "summary": p.summary, "fetched": now.isoformat()}
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(cached, indent=1, sort_keys=True), encoding="utf-8")
+        except OSError as e:
+            log.warning("could not write %s: %s", path, e)
+    return {s: Profile(cached[s].get("name", ""), cached[s].get("summary", "")) for s in symbols if s in cached}

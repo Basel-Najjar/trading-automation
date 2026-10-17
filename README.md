@@ -55,10 +55,18 @@ uv run streamlit run src/scanner/app.py      # run from the repository root
 - **Sidebar.** Pick a date (default today) and optionally force a data refresh, then press **Run analysis**. Every run
   scans all enabled symbols and all active strategies. All filtering happens after the scan.
 - **Top symbols.** Cards rank symbols by their best strategy's share of rules met. PENDING_CLOSE rules count as not
-  met. Ties go to the best candidate score. A slider sets the number of cards (default 10).
+  met. Ties go to the best candidate score. A slider sets the number of cards (default 10). Hover a card's symbol
+  line or **View** button for the ticker description.
+- **Ticker descriptions.** The name is your `notes` from `universe.csv`, or else the yfinance name. The summary is
+  the yfinance business summary. Both are display only and cached in `cache/profiles.json` for 30 days; **Force data
+  refresh** refetches them.
 - **Strategies and details.** Click **View** on a card to list that symbol's strategies, sorted by % of rules met.
-  Click a strategy row to see its details: rule evidence, chart, alert prices, nearest levels, score breakdown, plan
-  and checklists.
+  Click a strategy row to see its details: the ticker description, rule evidence, an interactive Plotly chart, alert
+  prices, nearest levels, score breakdown, plan and checklists. In the chart you can zoom, pan back through the full
+  history, hover, and click legend entries to hide levels. Double-click resets the view.
+- **Criteria tab.** Shows the exact logic each strategy is scanned with, built from `strategies.yaml`,
+  `settings.yaml` (per-strategy overrides applied) and the signal registry. Rules appear in the same order and with
+  the same names as the rule list in Results.
 - **Deep dive.** Pick symbols and/or strategies to filter the full HTML report. Picked symbols show every picked
   strategy, including rules that did not match. **Export report** downloads the report as shown. The app does not
   write to `reports/`.
@@ -141,9 +149,10 @@ Modules (`src/scanner/`):
 - `scoring`;
 - `pipeline`;
 - `replay`;
-- `charts` (inline SVG);
+- `charts` (inline SVG, for the HTML report);
 - `report`;
-- `cli`.
+- `cli`;
+- app only: `app`, `app_view`, `plotly_chart` (interactive chart), `criteria` (Criteria tab).
 
 ## Assumptions and decisions
 

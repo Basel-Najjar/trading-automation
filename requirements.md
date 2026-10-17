@@ -515,7 +515,9 @@ scanner cache refresh|info
 6. Each matched strategy shows its manual ORATS checklist and other manual checks verbatim.
 7. Alert helper block shows trigger/invalidation prices for each candidate and watch item.
 8. `--as-of` replay and `scanner replay` work without look-ahead; `signals_log.csv` is produced.
-9. No code path touches ORATS, option chains, fundamentals, earnings, or macro data.
+9. No code path touches ORATS, option chains, fundamentals, earnings, or macro data. (Exception, approved
+   2026-10-16: the Streamlit app reads each ticker's name and business summary from yfinance for display only;
+   nothing else from that profile is read or evaluated.)
 10. `scanner explain` explains any (symbol, strategy) result.
 11. Test suite passes.
 

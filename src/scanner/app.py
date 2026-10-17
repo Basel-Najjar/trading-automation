@@ -1,5 +1,6 @@
 """Streamlit front-end: scan everything for a date, rank symbols by % of strategy rules met, drill into a symbol and
-strategy, deep-dive/export the HTML report for a subset, and edit symbols and sector ETFs.
+strategy, deep-dive/export the HTML report for a subset, show each strategy's exact scan criteria, and edit symbols and
+sector ETFs.
 
 Run from the repository root:  uv run streamlit run src/scanner/app.py
 """
@@ -13,9 +14,19 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from scanner.app_view import chart_page, detail_view, filtered_result, strategy_rows, symbol_rankings
+from scanner.app_view import (
+    card_tooltip,
+    detail_view,
+    filtered_result,
+    split_summary,
+    strategy_rows,
+    symbol_rankings,
+    ticker_description,
+)
 from scanner.config import Config, load_config
 from scanner.config_edit import COLUMNS, save_edits, universe_table
+from scanner.criteria import global_criteria, strategy_criteria
+from scanner.data import Profile, fetch_profiles
 from scanner.models import Tri
 from scanner.pipeline import RunResult, run_scan
 from scanner.report import render_html, suffix_for
@@ -36,7 +47,7 @@ def _load() -> Config | None:
 
 
 def _clear_results() -> None:
-    for key in ("res", "cfg", "selected_symbol", "report_cache"):
+    for key in ("res", "cfg", "selected_symbol", "report_cache", "profiles"):
         st.session_state.pop(key, None)
 
 
@@ -51,6 +62,14 @@ def _run(cfg: Config, as_of: date, refresh: bool) -> None:
     st.session_state["res"] = res
     st.session_state["cfg"] = cfg
     st.session_state["report_cache"] = {}
+    with st.spinner("Loading ticker descriptions…"):
+        st.session_state["profiles"] = fetch_profiles(sorted(res.analyses), Path(cfg.settings.data.cache_dir),
+                                                      refresh=refresh)
+
+
+def _description(cfg: Config, symbol: str) -> tuple[str, str] | None:
+    profiles: dict[str, Profile] = st.session_state.get("profiles", {})
+    return ticker_description(cfg, profiles, symbol)
 
 
 # ----------------------------------------------------------------------------------------------
@@ -77,7 +96,7 @@ def _summary(res: RunResult) -> None:
                 st.write(f"- {d.severity.upper()} {d.symbol}: {d.message}")
 
 
-def _cards(res: RunResult) -> None:
+def _cards(res: RunResult, cfg: Config) -> None:
     ranked = symbol_rankings(res)
     st.subheader("Top symbols")
     st.caption("Ranked by the best strategy's share of rules met (PENDING_CLOSE counts as not met); ties by "
@@ -92,13 +111,14 @@ def _cards(res: RunResult) -> None:
         cols = st.columns(CARDS_PER_ROW)
         for col, row in zip(cols, shown[start:start + CARDS_PER_ROW], strict=False):
             b = row.best
+            tip = card_tooltip(_description(cfg, row.symbol))
             with col.container(border=True):
                 st.markdown(f"**{row.symbol}** · {row.close:,.2f} "
-                            f":{'green' if row.change_pct >= 0 else 'red'}[{row.change_pct:+.2f}%]")
+                            f":{'green' if row.change_pct >= 0 else 'red'}[{row.change_pct:+.2f}%]", help=tip)
                 st.metric("Best % met", f"{b.fraction:.0%}", f"{b.met}/{b.total} rules", delta_color="off")
                 st.caption(f"{b.ev.strategy.name}  \n{row.trend} · {row.n_full} full match"
                            f"{'' if row.n_full == 1 else 'es'}{' · ⏳ pending' if row.pending else ''}")
-                if st.button("View", key=f"card_{row.symbol}", width="stretch",
+                if st.button("View", key=f"card_{row.symbol}", width="stretch", help=tip,
                              type="primary" if row.symbol == selected else "secondary"):
                     st.session_state["selected_symbol"] = row.symbol
                     st.rerun()
@@ -126,13 +146,20 @@ def _details(res: RunResult, cfg: Config, symbol: str, strategy_id: str) -> None
     d = detail_view(res, cfg, symbol, strategy_id)
     st_, row = d["strategy"], d["row"]
     st.subheader(f"{symbol} × {st_.name}")
+    if desc := _description(cfg, symbol):
+        name, summary = desc
+        head, rest = split_summary(summary)
+        st.caption(f"**{name}** · {head}" if name and head else (f"**{name}**" if name else head))
+        if rest:
+            with st.expander(f"About {symbol}"):
+                st.write(rest)
     st.caption(f"{row.met}/{row.total} rules met · bias {st_.bias} · flow {d['flow_label']} · close {d['close']:,.2f}"
                f" · ATR {d['atr']:.2f} · RSI {d['rsi']:.1f}" + (f" · score {row.cand.score:.1f}" if row.cand else ""))
     if st_.description:
         st.write(st_.description)
     left, right = st.columns([3, 2])
     with left:
-        st.iframe(chart_page(d["chart"]), height="content")
+        st.plotly_chart(d["chart"], width="stretch", theme="streamlit", key=f"chart_{symbol}_{strategy_id}")
     with right:
         st.markdown("**Rules**")
         for rule, status, detail, evidence in d["rules"]:
@@ -198,7 +225,7 @@ def _results() -> None:
         return
     _summary(res)
     st.divider()
-    _cards(res)
+    _cards(res, cfg)
     symbol = st.session_state.get("selected_symbol")
     if symbol in res.analyses:
         st.divider()
@@ -208,6 +235,59 @@ def _results() -> None:
             _details(res, cfg, symbol, strategy_id)
     st.divider()
     _deep_dive(res, cfg)
+
+
+# ----------------------------------------------------------------------------------------------
+# Criteria
+# ----------------------------------------------------------------------------------------------
+
+
+def _criteria(cfg: Config) -> None:
+    st.subheader("Scan criteria")
+    st.caption("Exactly what the scanner checks for each strategy, built from `strategies.yaml` and `settings.yaml` "
+               "(per-strategy overrides applied). Rule names match the rule list in Results.")
+    with st.expander("Shared definitions"):
+        for term, text in global_criteria(cfg):
+            st.markdown(f"**{term}**: {text}")
+    show_inactive = st.toggle("Show inactive strategies", value=False)
+    for c in strategy_criteria(cfg):
+        if not c.active and not show_inactive:
+            continue
+        stg = c.strategy
+        with st.container(border=True):
+            badge = "" if c.active else " :gray-badge[inactive]"
+            st.markdown(f"#### {stg.name}{badge}")
+            st.caption(f"`{stg.id}` · bias **{stg.bias}** · status {stg.status}")
+            if stg.description:
+                st.write(stg.description)
+            if c.overrides:
+                st.info("Overrides for this strategy: " + ", ".join(f"`{k}` = {v}" for k, v in c.overrides.items()))
+            if not c.rules:
+                st.caption("No technical rules: the scanner does not evaluate this strategy.")
+            for n, rule in enumerate(c.rules, 1):
+                st.markdown(f"**{n}. `{rule.rule}`**: {rule.summary}")
+                for line in rule.details:
+                    st.markdown(f"- {line}")
+                for sig in rule.signals:
+                    st.markdown(f"- **`{sig.name}`** ({sig.kind}, {sig.direction}): {sig.description}")
+                if rule.signals:
+                    params = {p: v for sig in rule.signals for p, v in sig.params}
+                    st.dataframe(pd.DataFrame([{"Parameter": p, "Value": str(v)} for p, v in params.items()]),
+                                 hide_index=True)
+                if rule.table:
+                    st.dataframe(pd.DataFrame(rule.table, columns=["Bias", "Agree", "Oppose"]), hide_index=True)
+            if c.outcome:
+                st.markdown("**Result**")
+                st.markdown("\n".join(f"- {x}" for x in c.outcome))
+            with st.expander("Display-only (not evaluated by the scanner)"):
+                for title, items in (("Construction", stg.construction), ("ORATS checklist", stg.orats_checklist),
+                                     ("Other manual checks", stg.other_manual_checks)):
+                    if items:
+                        st.markdown(f"**{title}**\n" + "\n".join(f"- {x}" for x in items))
+                if stg.plan:
+                    st.markdown("**Plan**\n" + "\n".join(
+                        f"- {k}: " + ("; ".join(map(str, v)) if isinstance(v, list) else str(v))
+                        for k, v in stg.plan.items()))
 
 
 # ----------------------------------------------------------------------------------------------
@@ -264,9 +344,11 @@ def main() -> None:
         st.caption("Every run scans all enabled symbols and active strategies.")
         if st.button("Run analysis", type="primary", width="stretch"):
             _run(cfg, as_of, refresh)
-    results, config = st.tabs(["Results", "Config"])
+    results, criteria, config = st.tabs(["Results", "Criteria", "Config"])
     with results:
         _results()
+    with criteria:
+        _criteria(cfg)
     with config:
         _config_editor(cfg)
 

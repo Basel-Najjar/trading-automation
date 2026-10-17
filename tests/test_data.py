@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import pytest
 
 from conftest import FakeProvider, random_frame
 from scanner import sessions
-from scanner.data import ParquetCache, ensure_data, normalize_frame, quality_checks, recent_gaps
+from scanner.data import (
+    ParquetCache,
+    Profile,
+    ensure_data,
+    fetch_profiles,
+    normalize_frame,
+    quality_checks,
+    recent_gaps,
+)
 
 ET = sessions.ET
 AFTER_CLOSE = datetime(2026, 9, 30, 17, 0, tzinfo=ET)
@@ -126,3 +134,29 @@ def test_recent_gaps_atr_multiple_and_lookback():
     (d, g_atr, g_pct), = recent_gaps(new, 14, 3.0, 15)
     assert d == new.index[-5].date() and abs(g_pct - 8.0) < 1e-9 and g_atr > 3.0
     assert recent_gaps(new, 14, g_atr + 0.1, 15) == []  # threshold is in ATRs, not percent
+
+
+def test_fetch_profiles_caches_and_refetches_stale(tmp_path):
+    calls: list[str] = []
+
+    def fake(sym: str) -> Profile:
+        calls.append(sym)
+        if sym == "BAD":
+            raise RuntimeError("boom")
+        return Profile(f"{sym} Inc", f"{sym} does things.")
+
+    t0 = datetime(2026, 10, 1)
+    out = fetch_profiles(["AAA", "BAD"], tmp_path, now=t0, fetch=fake)
+    assert out["AAA"] == Profile("AAA Inc", "AAA does things.") and out["BAD"] == Profile()
+    assert sorted(calls) == ["AAA", "BAD"]
+
+    calls.clear()  # within the TTL nothing is refetched, and the failure is not retried
+    fetch_profiles(["AAA", "BAD"], tmp_path, now=t0 + timedelta(days=5), fetch=fake)
+    assert calls == []
+
+    fetch_profiles(["AAA"], tmp_path, now=t0 + timedelta(days=5), fetch=fake, refresh=True)
+    assert calls == ["AAA"]
+
+    calls.clear()  # stale after the TTL
+    fetch_profiles(["AAA", "BAD"], tmp_path, now=t0 + timedelta(days=40), fetch=fake)
+    assert sorted(calls) == ["AAA", "BAD"]

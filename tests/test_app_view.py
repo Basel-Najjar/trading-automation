@@ -6,7 +6,16 @@ from datetime import date
 
 import pytest
 
-from scanner.app_view import chart_page, detail_view, filtered_result, strategy_rows, symbol_rankings
+from scanner.app_view import (
+    card_tooltip,
+    detail_view,
+    filtered_result,
+    split_summary,
+    strategy_rows,
+    symbol_rankings,
+    ticker_description,
+)
+from scanner.data import Profile
 from scanner.models import RuleResult, Tri
 from scanner.pipeline import scan
 from scanner.report import render_html
@@ -70,6 +79,28 @@ def test_detail_view_for_every_pair(res, cfg):
     for sym in res.analyses:
         for r in strategy_rows(res, sym):
             d = detail_view(res, cfg, sym, r.ev.strategy.id)
-            assert d["chart"].startswith("<svg") and len(d["rules"]) == r.total
-    page = chart_page("<svg></svg>")
-    assert "<style>" in page and ".chart .wick" in page
+            assert len(d["rules"]) == r.total
+            types = [t.type for t in d["chart"].data]
+            assert types.count("candlestick") == (2 if res.analyses[sym].provisional else 1)
+            assert any(t.name == "RSI" for t in d["chart"].data)
+
+
+def test_ticker_description_priority(cfg):
+    u = cfg.universe[0]
+    u.notes = ""
+    acme = Profile("Acme Corp", "Makes things.")
+    assert ticker_description(cfg, {}, u.symbol) is None
+    assert ticker_description(cfg, {u.symbol: Profile()}, u.symbol) is None
+    assert ticker_description(cfg, {u.symbol: acme}, u.symbol) == ("Acme Corp", "Makes things.")
+    u.notes = "  Acme (my note)  "  # your note names the ticker; the summary still comes from the profile
+    assert ticker_description(cfg, {u.symbol: acme}, u.symbol) == ("Acme (my note)", "Makes things.")
+    assert ticker_description(cfg, {}, u.symbol) == ("Acme (my note)", "")
+
+
+def test_card_tooltip_and_summary_split():
+    tip = card_tooltip(("Acme", "First sentence here. " * 40))
+    assert tip.startswith("**Acme**") and len(tip) < 330 and tip.endswith(".")
+    assert card_tooltip(None) is None
+    assert card_tooltip(("", "Short note")) == "Short note"
+    assert split_summary("One. Two! Three? Four.") == ("One. Two!", "Three? Four.")
+    assert split_summary("Only one.") == ("Only one.", "")
