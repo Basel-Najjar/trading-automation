@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import csv
 import difflib
-import hashlib
-import json
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -21,11 +19,11 @@ from scanner.models import BIASES, SIGNAL_NAMES, TREND_STATES
 # ----------------------------------------------------------------------------------------------
 
 
-class _Strict(BaseModel):
+class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class DataSettings(_Strict):
+class DataSettings(Strict):
     history_years: float = 3
     price_adjustment: Literal["split_only", "total_return"] = "split_only"
     benchmark: str = "SPY"
@@ -41,7 +39,7 @@ class DataSettings(_Strict):
     max_retries: int = 3
 
 
-class IndicatorSettings(_Strict):
+class IndicatorSettings(Strict):
     atr_period: int = 14
     rsi_period: int = 14
     rsi_overbought: float = 70
@@ -49,11 +47,11 @@ class IndicatorSettings(_Strict):
     relvol_period: int = 20
 
 
-class PivotSettings(_Strict):
+class PivotSettings(Strict):
     pivot_window: int = Field(5, ge=1)
 
 
-class LevelSettings(_Strict):
+class LevelSettings(Strict):
     zone_atr_mult: float = 0.25
     cluster_atr_mult: float = 0.5
     min_touches_horizontal: int = 2
@@ -68,7 +66,7 @@ class LevelSettings(_Strict):
     manual_quality: float = 3.0
 
 
-class SignalSettings(_Strict):
+class SignalSettings(Strict):
     full_body_ratio: float = 0.70
     break_engulfing_require_opposite_color: bool = False
     pattern_engulfing_require_opposite_color: bool = True
@@ -82,7 +80,7 @@ class SignalSettings(_Strict):
     chase_atr: float = 1.5
 
 
-class RangeSettings(_Strict):
+class RangeSettings(Strict):
     mid_band: tuple[float, float] = (0.35, 0.65)
 
 
@@ -106,7 +104,7 @@ def _default_oppose() -> dict[str, list[str]]:
     }
 
 
-class FlowSettings(_Strict):
+class FlowSettings(Strict):
     agree: dict[str, list[str]] = Field(default_factory=_default_agree)
     oppose: dict[str, list[str]] = Field(default_factory=_default_oppose)
 
@@ -126,7 +124,7 @@ def _known_weights(v: dict[str, float]) -> dict[str, float]:
     return v
 
 
-class ScoringSettings(_Strict):
+class ScoringSettings(Strict):
     weights: dict[str, float] = Field(
         default_factory=lambda: {
             "signal": 25,
@@ -182,19 +180,13 @@ class ScoringSettings(_Strict):
         return {**self.weights, **strat.scoring.weights}
 
 
-class ReportSettings(_Strict):
+class DisplaySettings(Strict):
     max_watch_items: int = 30
     max_watch_items_per_symbol: int = 3
     chart_bars: int = 150
-    timezone: str = "America/Chicago"
-    reports_dir: str = "reports"
 
 
-class ReplaySettings(_Strict):
-    forward_horizons: list[int] = Field(default_factory=lambda: [3, 5, 10, 20])
-
-
-class Settings(_Strict):
+class Settings(Strict):
     data: DataSettings = Field(default_factory=DataSettings)
     indicators: IndicatorSettings = Field(default_factory=IndicatorSettings)
     pivots: PivotSettings = Field(default_factory=PivotSettings)
@@ -203,15 +195,11 @@ class Settings(_Strict):
     range: RangeSettings = Field(default_factory=RangeSettings)
     flow: FlowSettings = Field(default_factory=FlowSettings)
     scoring: ScoringSettings = Field(default_factory=ScoringSettings)
-    report: ReportSettings = Field(default_factory=ReportSettings)
-    replay: ReplaySettings = Field(default_factory=ReplaySettings)
+    display: DisplaySettings = Field(default_factory=DisplaySettings)
 
     @property
     def window_bars(self) -> int:
         return max(int(round(self.data.history_years * 252)), self.data.min_bars)
-
-    def digest(self) -> str:
-        return hashlib.sha256(json.dumps(self.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()
 
     def with_overrides(self, overrides: dict[str, Any]) -> Settings:
         """Apply per-strategy overrides (signal-stage keys only, see OVERRIDABLE_KEYS)."""
@@ -240,7 +228,7 @@ def _none_to_list(v: Any) -> Any:
     return [] if v is None else v
 
 
-class Technical(_Strict):
+class Technical(Strict):
     trend: list[str] = Field(default_factory=lambda: ["any"])
     signals_all: list[str] = Field(default_factory=list)
     signals_any: list[str] = Field(default_factory=list)
@@ -286,7 +274,7 @@ class Technical(_Strict):
         return self.trend == ["any"] and not self.signals_all and not self.signals_any
 
 
-class StrategyScoring(_Strict):
+class StrategyScoring(Strict):
     """Per-strategy score weights; keys given here replace the global `settings.yaml → scoring.weights`."""
 
     weights: dict[str, float] = Field(default_factory=dict)
@@ -355,7 +343,7 @@ class UniverseEntry:
     sector_etf: str | None = None
 
 
-class ManualLevel(_Strict):
+class ManualLevel(Strict):
     type: Literal["horizontal", "diagonal"]
     role: Literal["support", "resistance"]
     price: float | None = None
@@ -374,15 +362,6 @@ class ManualLevel(_Strict):
 
 
 @dataclass
-class ExpectedRead:
-    date: date
-    symbol: str
-    expected: list[str]
-    note: str = ""
-    line: int = 0
-
-
-@dataclass
 class Issue:
     file: str
     line: int | None
@@ -396,6 +375,14 @@ class Issue:
         return f"{self.severity.upper()} {loc}:{where} {self.message}"
 
 
+def error_issues(issues: list[Issue]) -> list[Issue]:
+    return [i for i in issues if i.severity == "error"]
+
+
+def has_errors(issues: list[Issue]) -> bool:
+    return any(i.severity == "error" for i in issues)
+
+
 @dataclass
 class Config:
     root: Path
@@ -404,8 +391,6 @@ class Config:
     universe: list[UniverseEntry]
     sector_map: dict[str, str]
     manual_levels: dict[str, list[ManualLevel]] = field(default_factory=dict)
-    expected_reads: list[ExpectedRead] = field(default_factory=list)
-    hashes: dict[str, str] = field(default_factory=dict)
 
     @property
     def symbols(self) -> list[str]:
@@ -438,7 +423,7 @@ def _line_map(node: yaml.Node, path: tuple = (), out: dict | None = None) -> dic
     return out
 
 
-def _line_for(lines: dict[tuple, int], loc: tuple) -> int | None:
+def line_for(lines: dict[tuple, int], loc: tuple) -> int | None:
     loc = tuple(loc)
     while loc:
         if loc in lines:
@@ -447,7 +432,7 @@ def _line_for(lines: dict[tuple, int], loc: tuple) -> int | None:
     return lines.get(())
 
 
-def _read_yaml(path: Path, issues: list[Issue]) -> tuple[Any, dict[tuple, int]]:
+def read_yaml(path: Path, issues: list[Issue]) -> tuple[Any, dict[tuple, int]]:
     text = path.read_text(encoding="utf-8")
     try:
         node = yaml.compose(text)
@@ -466,7 +451,7 @@ def _fmt_loc(loc: tuple) -> str:
     return out
 
 
-def _pydantic_issues(
+def pydantic_issues(
     err: ValidationError, fname: str, lines: dict[tuple, int], prefix: tuple = (), label: str = ""
 ) -> list[Issue]:
     issues = []
@@ -478,7 +463,7 @@ def _pydantic_issues(
             sibling_fields = _known_fields_at(loc[:-1])
             msg = f"unknown key '{key}'{_suggest(str(key), sibling_fields)}"
         where = (label + _fmt_loc(loc)) if label else _fmt_loc(loc)
-        issues.append(Issue(fname, _line_for(lines, prefix + loc), where, msg))
+        issues.append(Issue(fname, line_for(lines, prefix + loc), where, msg))
     return issues
 
 
@@ -502,31 +487,43 @@ def _known_fields_at(loc: tuple) -> list[str]:
 # ----------------------------------------------------------------------------------------------
 
 
+REMOVED_SETTINGS = {
+    "report": "static reports were removed; rename this section to `display:` and keep only max_watch_items, "
+              "max_watch_items_per_symbol and chart_bars",
+    "replay": "replay was removed; delete this section",
+}
+
+
 def load_settings(path: Path, issues: list[Issue]) -> Settings | None:
     if not path.exists():
         issues.append(Issue(path.name, None, "", "file missing — using all defaults", "warning"))
         return Settings()
-    data, lines = _read_yaml(path, issues)
+    data, lines = read_yaml(path, issues)
     if data is None:
         data = {}
     if not isinstance(data, dict):
         issues.append(Issue(path.name, 1, "", "top level must be a mapping"))
         return None
+    for key, why in REMOVED_SETTINGS.items():
+        if key in data:
+            issues.append(Issue(path.name, line_for(lines, (key,)), key, f"no longer supported: {why}"))
+    if has_errors(issues):
+        return None
     try:
         s = Settings.model_validate(data)
     except ValidationError as e:
-        issues.extend(_pydantic_issues(e, path.name, lines))
+        issues.extend(pydantic_issues(e, path.name, lines))
         return None
     w = s.scoring.weights
     if abs(sum(w.values()) - 100) > 1e-6:
         issues.append(
-            Issue(path.name, _line_for(lines, ("scoring", "weights")), "scoring.weights",
+            Issue(path.name, line_for(lines, ("scoring", "weights")), "scoring.weights",
                   f"weights sum to {sum(w.values()):g}; scores are scaled to 0–100 only when they sum to 100",
                   "warning")
         )
     lo, hi = s.range.mid_band
     if not 0 <= lo < hi <= 1:
-        issues.append(Issue(path.name, _line_for(lines, ("range", "mid_band")), "range.mid_band",
+        issues.append(Issue(path.name, line_for(lines, ("range", "mid_band")), "range.mid_band",
                             "mid_band must satisfy 0 ≤ low < high ≤ 1"))
         return None
     return s
@@ -539,7 +536,7 @@ def load_strategies(path: Path, issues: list[Issue]) -> list[Strategy] | None:
     if not path.exists():
         issues.append(Issue(path.name, None, "", "file missing (required)"))
         return None
-    data, lines = _read_yaml(path, issues)
+    data, lines = read_yaml(path, issues)
     if data is None:
         return None if any(i.file == path.name for i in issues) else []
     if not isinstance(data, list):
@@ -552,19 +549,19 @@ def load_strategies(path: Path, issues: list[Issue]) -> list[Strategy] | None:
         sid = raw.get("id", f"#{i}") if isinstance(raw, dict) else f"#{i}"
         label = f"strategies[{i}] ({sid})"
         if not isinstance(raw, dict):
-            issues.append(Issue(path.name, _line_for(lines, (i,)), label, "each strategy must be a mapping"))
+            issues.append(Issue(path.name, line_for(lines, (i,)), label, "each strategy must be a mapping"))
             ok = False
             continue
         raw_id = raw.get("id")
         if isinstance(raw_id, str):
             if raw_id in seen:
-                issues.append(Issue(path.name, _line_for(lines, (i, "id")), label,
+                issues.append(Issue(path.name, line_for(lines, (i, "id")), label,
                                     f"duplicate id '{raw_id}' (first defined on line {seen[raw_id]})"))
                 ok = False
-            seen.setdefault(raw_id, _line_for(lines, (i, "id")) or 0)
+            seen.setdefault(raw_id, line_for(lines, (i, "id")) or 0)
         removed = [k for k in REMOVED_STRATEGY_KEYS if k in raw]
         for k in removed:
-            issues.append(Issue(path.name, _line_for(lines, (i, k)), label + f".{k}",
+            issues.append(Issue(path.name, line_for(lines, (i, k)), label + f".{k}",
                                 "no longer supported: the scanner keeps technical parameters only (non-technical "
                                 "playbook fields were removed); delete this key"))
         if removed:
@@ -573,22 +570,23 @@ def load_strategies(path: Path, issues: list[Issue]) -> list[Strategy] | None:
         try:
             s = Strategy.model_validate(raw)
         except ValidationError as e:
-            issues.extend(_pydantic_issues(e, path.name, lines, prefix=(i,), label=label + "."))
+            issues.extend(pydantic_issues(e, path.name, lines, prefix=(i,), label=label + "."))
             ok = False
             continue
         if s.active and s.technical.is_empty:
-            issues.append(Issue(path.name, _line_for(lines, (i, "technical")), label,
+            issues.append(Issue(path.name, line_for(lines, (i, "technical")), label,
                                 "enabled strategy has no technical rules — it would match every symbol",
                                 "warning"))
         out.append(s)
     return out if ok else None
 
 
-def _clean_symbol(s: str) -> str:
+def clean_symbol(s: str) -> str:
     return s.strip().upper()
 
 
 LEGACY_FILES = {
+    "expected_reads.csv": "check-reads (and replay) were removed; delete expected_reads.csv",
     "universe.txt": "symbols now live only in universe.csv (columns symbol,type,sector_etf,enabled,notes); move the "
                     "symbols there and delete universe.txt",
     "sector_map.csv": "sector ETFs now live in universe.csv's sector_etf column; move the mappings there and delete "
@@ -617,7 +615,7 @@ def load_universe(root: Path, issues: list[Issue]) -> list[UniverseEntry] | None
             return None
         for n, row in enumerate(reader, start=2):
             row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
-            sym = _clean_symbol(row.get("symbol", ""))
+            sym = clean_symbol(row.get("symbol", ""))
             if not sym:
                 issues.append(Issue(fname, n, "symbol", "empty symbol — row ignored", "warning"))
                 continue
@@ -631,7 +629,7 @@ def load_universe(root: Path, issues: list[Issue]) -> list[UniverseEntry] | None
                 return None
             entries.append(
                 UniverseEntry(sym, typ, en in ("true", "1", "yes", "y"), row.get("notes", ""),
-                              _clean_symbol(row["sector_etf"]) if row.get("sector_etf") else None)
+                              clean_symbol(row["sector_etf"]) if row.get("sector_etf") else None)
             )
     seen: set[str] = set()
     deduped = []
@@ -658,7 +656,7 @@ def load_manual_levels(root: Path, issues: list[Issue]) -> dict[str, list[Manual
     p = root / "manual_levels.yaml"
     if not p.exists():
         return {}
-    data, lines = _read_yaml(p, issues)
+    data, lines = read_yaml(p, issues)
     if not data:
         return {}
     if not isinstance(data, dict):
@@ -666,46 +664,13 @@ def load_manual_levels(root: Path, issues: list[Issue]) -> dict[str, list[Manual
         return {}
     out: dict[str, list[ManualLevel]] = {}
     for sym, items in data.items():
-        key = _clean_symbol(str(sym))
+        key = clean_symbol(str(sym))
         for i, item in enumerate(items or []):
             try:
                 out.setdefault(key, []).append(ManualLevel.model_validate(item))
             except ValidationError as e:
-                issues.extend(_pydantic_issues(e, p.name, lines, prefix=(sym, i), label=f"{key}[{i}]."))
+                issues.extend(pydantic_issues(e, p.name, lines, prefix=(sym, i), label=f"{key}[{i}]."))
     return out
-
-
-def load_expected_reads(root: Path, issues: list[Issue]) -> list[ExpectedRead]:
-    p = root / "expected_reads.csv"
-    if not p.exists():
-        return []
-    vocab = (*SIGNAL_NAMES, *TREND_STATES)
-    out = []
-    with p.open(newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        cols = [c.strip().lower() for c in (reader.fieldnames or [])]
-        if not {"date", "symbol", "expected"} <= set(cols):
-            issues.append(Issue(p.name, 1, "", "columns must include 'date,symbol,expected' (optional 'note')"))
-            return []
-        for n, row in enumerate(reader, start=2):
-            row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
-            try:
-                d = date.fromisoformat(row["date"])
-            except ValueError:
-                issues.append(Issue(p.name, n, "date", f"invalid date '{row['date']}' (use YYYY-MM-DD)"))
-                continue
-            exp = [x.strip() for x in row["expected"].split(";") if x.strip()]
-            bad = [x for x in exp if x not in vocab]
-            for x in bad:
-                issues.append(Issue(p.name, n, "expected", f"unknown signal/trend '{x}'{_suggest(x, vocab)}"))
-            if bad or not exp:
-                continue
-            out.append(ExpectedRead(d, _clean_symbol(row["symbol"]), exp, row.get("note", ""), n))
-    return out
-
-
-def _file_hash(p: Path) -> str:
-    return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else ""
 
 
 def _weight_sum_issues(path: Path, settings: Settings, strategies: list[Strategy]) -> list[Issue]:
@@ -733,14 +698,7 @@ def load_config(root: Path) -> tuple[Config | None, list[Issue]]:
     universe = load_universe(root, issues)
     sector_map = sector_map_of(universe) if universe is not None else {}
     manual = load_manual_levels(root, issues)
-    reads = load_expected_reads(root, issues)
-    if any(i.severity == "error" for i in issues) or None in (settings, strategies, universe):
+    if has_errors(issues) or None in (settings, strategies, universe):
         return None, issues
     issues += _weight_sum_issues(root / "strategies.yaml", settings, strategies)
-    hashes = {
-        name: _file_hash(root / name)
-        for name in ("settings.yaml", "strategies.yaml", "universe.csv", "manual_levels.yaml")
-        if (root / name).exists()
-    }
-    hashes["settings_effective"] = settings.digest()
-    return Config(root, settings, strategies, universe, sector_map, manual, reads, hashes), issues
+    return Config(root, settings, strategies, universe, sector_map, manual), issues

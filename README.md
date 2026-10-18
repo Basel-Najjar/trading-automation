@@ -2,8 +2,9 @@
 
 A daily-bar technical scanner for a personal watchlist. It finds support/resistance holds and breaks, trend and range
 states, and RSI extension, using the rules in [requirements.md](requirements.md). Each setup is matched to the strategies in
-`config/strategies.yaml`. The output is a ranked shortlist in a self-contained HTML report, with charts, evidence, score
-breakdowns and copy-ready TradingView alert prices.
+`config/strategies.yaml`. A Streamlit app shows the matches as Bullish / Bearish / Neutral candidates, with charts,
+evidence, score breakdowns and copy-ready TradingView alert prices. The app is the only interface: there is no CLI,
+and nothing is written to files except the price cache and the config you edit.
 
 The scanner is the **discovery layer only**. It never touches ORATS, option chains, fundamentals, earnings or macro data,
 and the config holds technical parameters only. Data is free daily OHLCV from `yfinance`.
@@ -14,9 +15,10 @@ Requires Python ≥ 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ```
 uv sync
-uv run scanner validate          # checks config/ and lists unknown tickers
-uv run scanner run               # writes reports/<date>/scan.html
+uv run streamlit run src/scanner/app.py      # run from the repository root (reads .streamlit/config.toml)
 ```
+
+The app validates `config/` when it loads and before every save; an invalid file shows its errors on the page.
 
 ## Files you maintain (`config/`)
 
@@ -27,31 +29,11 @@ uv run scanner run               # writes reports/<date>/scan.html
 | `strategies.default.yaml` | The preserved original playbook. The app's **Restore defaults** copies it over `strategies.yaml`. Never read by the scanner. |
 | `settings.yaml` | All technical parameters, with defaults. Keys marked `[added]` are not in the spec's §6.9 (see Assumptions). |
 | `manual_levels.yaml` | Optional owner-drawn levels (see `manual_levels.example.yaml`). |
-| `expected_reads.csv` | Optional chart reads for `check-reads` (see `expected_reads.example.csv`). Separate multiple expected items with `;`. |
 | `markets.yaml` | Lists for the app's **Markets** page, one per tool (`levels`, `rrg` with its `benchmark`, `pca`). Each holds tickers or `NUM/DEN` ratios. Also holds per-resolution parameters. Independent of `universe.csv`. |
 
 The signal vocabulary and its exact definitions are in [docs/signals.md](docs/signals.md).
 
-## Commands
-
-```
-scanner run                                  # full scan as of the latest completed bar
-scanner run --symbol AAPL                    # deep dive: all strategies incl. non-matching rules → scan_AAPL.html
-scanner run --strategy bull_put_spread       # only that strategy → scan_strategy_bull_put_spread.html
-scanner run --as-of 2026-09-15               # replay one date (prior session if not a trading day)
-scanner run --refresh                        # re-download instead of using the cache
-scanner replay --start 2026-06-01 --end 2026-09-30   # signals_log.csv with forward outcomes
-scanner explain --symbol AAPL --strategy bull_put_spread [--as-of DATE]
-scanner check-reads                          # compare replay with config/expected_reads.csv
-scanner validate [--offline]                 # also checks config/markets.yaml when present
-scanner cache info | scanner cache refresh
-```
-
-### Streamlit app
-
-```
-uv run streamlit run src/scanner/app.py      # run from the repository root (reads .streamlit/config.toml)
-```
+## The app
 
 The app has two pages, **Scanner** and **Markets**, in the top navigation. On the Scanner page, the Results tab goes
 from high level to detail: overview, then the list, then one setup, then its evidence.
@@ -88,8 +70,7 @@ from high level to detail: overview, then the list, then one setup, then its evi
   leaves the chart and its zoom as they are and updates only what follows: score, rules met, trend and flow, one
   plain line per rule, and the **price ladder**, which lists alert prices (including invalidation) and the last
   close, highest first. A near miss shows its trigger prices, or the
-  nearest zones if nothing is close. **Criteria** jumps to the strategy's logic; **Export** downloads the HTML report
-  for this setup.
+  nearest zones if nothing is close. **Criteria** jumps to the strategy's logic.
 - **Evidence tabs.** **Why** has the score breakdown, the signals that fired, the trend and flow reasoning, and the
   raw rule evidence. **Levels** has the nearest levels. **About** has the full business summary.
 - **Criteria tab.** Each strategy shows a one-line recipe (trend, required and trigger signals, extension, flow).
@@ -100,9 +81,6 @@ from high level to detail: overview, then the list, then one setup, then its evi
   Saving validates first, then rewrites only that strategy's lines in `strategies.yaml`; comments and everything else
   are kept. Strategies that differ from `strategies.default.yaml` show a **modified** badge, and **Restore defaults**
   puts the original back. Saving or restoring clears the current results.
-- **Report tab.** The full HTML report. Pick symbols and/or strategies to filter it. Picked symbols show every picked
-  strategy, including rules that did not match. **Export report** downloads the report as shown. The app does not
-  write to `reports/`.
 - **Config tab.** Edit symbols, type, sector ETF, enabled, notes and the benchmark. **Save config** validates the
   edit first and writes nothing if there are errors. It then rewrites `universe.csv` and the `benchmark:` line in
   `settings.yaml`.
@@ -136,41 +114,11 @@ needs (8 years by default), so switching resolution never downloads.
   read as a shift.
 - **Lists.** Edit the three lists and the RRG benchmark. Saving validates first, writes nothing on errors, and keeps
   the `resolutions:` block as written. Press **Refresh prices** after adding tickers.
-- **Export HTML.** An offline snapshot of all three views at the current resolution, with plotly.js embedded once
-  (about 7–8 MB with the default lists).
 
-Use `uv run scanner …`, or activate `.venv`. All commands accept `--config-dir/-c`. Output commands also accept
-`--reports-dir`.
+## Reading the results
 
-**Exit codes:**
-- `0` success;
-- `1` hard failure (invalid config, no analysable symbols);
-- `2` completed with data or symbol warnings (skipped symbols, quality warnings, failed downloads).
-
-Each run writes `run.json` with its parameters, versions, counts, warnings, and hashes of the config and data. A
-scheduler (cron, Task Scheduler) can run `scanner run` after the close and check the exit code.
-
-### Outputs (`reports/<as-of>/`)
-
-- `scan.html`: the report. It is a single file with no external requests and works offline and in print. Sections:
-  1. Run summary
-  2. Market context
-  3. Ranked shortlist (sortable, with filters)
-  4. Candidate cards
-  5. Watch list
-  6. Diagnostics
-- `candidates.json`: the full audit trail (rules, evidence, score breakdown, levels, signals per symbol).
-- `candidates.csv`: one row per (symbol, strategy).
-- `tradingview_watchlist.txt`: comma-separated shortlist and watch-list symbols, ready to paste into a TradingView watchlist.
-- `run.json` and `config_snapshot/`: the run manifest and copies of `settings.yaml` and `strategies.yaml`.
-
-Replay writes to `reports/replay_<start>_<end>/signals_log.csv`. Its forward returns and MFE/MAE (in ATRs) are informational
-only and **not a backtest**.
-
-## Reading the report
-
-- **Score** (0–100) is a transparent weighted sum, broken down on every card. The evidence is the source of truth;
-  the score only orders the list.
+- **Score** (0–100) is a transparent weighted sum, broken down in the setup pane's **Why** tab. The evidence is the
+  source of truth; the score only orders the list.
 - **PENDING_CLOSE** appears when you run during market hours: the signal would fire if the bar closed now. Re-run
   after the close; the latest bar becomes final 30 minutes after the session close (`close_buffer_minutes`).
 - **Stretched** means a break that has already run more than `chase_atr` (1.5) ATRs beyond its zone.
@@ -189,8 +137,8 @@ incrementally. It cuts every series at the as-of date, computes ATR/SMA/RSI and 
 horizontal pivot clusters, diagonal trendlines, manual levels) with ATR zones, classifies trend and range from
 pivots, and evaluates the signal registry on the latest bar and the bar before it. It then measures relative
 strength on price ratios, evaluates each enabled strategy's rules with three-valued logic, scores and ranks the
-matches, builds the watch list, and renders the report. The cut at the as-of date happens in one place
-(`pipeline.scan`), so live runs and replays use identical code. Tests confirm that changing bars after the as-of date
+matches and builds the watch list; the app then groups the tickers by direction. The cut at the as-of date happens in
+one place (`pipeline.scan`), so a scan of today and a scan of a past session use identical code. Tests confirm that changing bars after the as-of date
 does not change the output.
 
 ## Development
@@ -200,23 +148,17 @@ uv run pytest            # full test suite
 uv run ruff check src tests
 ```
 
-Modules (`src/scanner/`):
-- `config` (validation);
-- `sessions` (XNYS calendar);
-- `data` (provider, cache, quality checks);
-- `indicators`;
-- `levels`;
-- `trend`;
-- `signals` (registry; add a signal here and in `docs/signals.md`);
-- `flow`;
-- `strategies`;
-- `scoring`;
-- `pipeline`;
-- `replay`;
-- `charts` (inline SVG, for the HTML report);
-- `report`;
-- `cli`;
-- app only: `app`, `app_view`, `plotly_chart` (interactive chart), `criteria` (Criteria tab).
+Modules (`src/scanner/`), in layers; each imports only from the layers above it:
+- **Inputs:** `config` (loading and validation), `sessions` (XNYS calendar), `data` (provider, Parquet cache,
+  quality checks).
+- **Engine:** `models` (value types), `indicators`, `levels`, `trend`, `signals` (registry; add a signal here and in
+  `docs/signals.md`), `flow`, `strategies`, `scoring`, and `pipeline` (`scan` is pure; `run_scan` loads prices
+  first).
+- **Views, framework-free and unit-tested:** `labels` (display vocabulary), `views` (level and market-context
+  dicts), `plotly_chart` (the interactive chart), `criteria` (Criteria tab), `app_view` (Scanner page view model),
+  `markets/` (config, series, structure, RRG, PCA, figures, run).
+- **Streamlit:** `app` (navigation), `scanner_page`, `markets/page`, `ui` (helpers both pages share), and
+  `config_edit` (validated writes to `config/`).
 
 ## Assumptions and decisions
 
@@ -241,7 +183,12 @@ The spec's stated defaults are implemented as written unless listed here. Everyt
     no longer qualifies them.
 - **Per-strategy overrides** are limited to `signals:` keys and the RSI thresholds.
 - **Scoring normalisations** use the defaults listed in [docs/signals.md](docs/signals.md#score-0100), to be tuned
-  with replay.
+  against your chart reads.
+- **App-only (2026-10-18, owner request).** The CLI, the static HTML/CSV/JSON report, the TradingView list file, the
+  run manifest, replay (`signals_log.csv`), check-reads (`expected_reads.csv`) and the HTML exports were removed.
+  The spec's §8 (replay) and §10 (outputs and CLI) are retired. Past sessions stay reachable through the app's session
+  date. A leftover `report:` or `replay:` section in `settings.yaml`, or an `expected_reads.csv`, is an error that says
+  what to do (`report:` becomes `display:`).
 - **Scores belong to a (symbol, strategy) pair** (2026-10-16, owner request). The signal is scored against the best
   signal that strategy allows. `trend_fit` measures the strength of the trend state it asked for. `room` and RSI
   headroom follow its bias. A strategy's `scoring: weights:` in `strategies.yaml` replace the global weights.
@@ -264,15 +211,11 @@ The spec's stated defaults are implemented as written unless listed here. Everyt
   not fire are absent rather than marked pending, so not every rule becomes pending during market hours. Pending
   candidates rank after confirmed ones.
 - A bar is provisional until session close + 30 min (US/Eastern, exchange calendar incl. early closes).
-- Shortlist: one row per symbol. The row score is the symbol's best candidate score. Per-strategy ranks show in
-  chip tooltips and via the strategy filter.
 - Watch items: every non-signal rule (trend, extension, alignment) passes and a required signal is "near". The
   definitions per signal are in `signals.py` (`register_near`).
 - The relative volume denominator is the average of the 20 bars **before** the current bar.
-- Benchmark failure does not abort the run: flow components become `n/a` and the run exits with code 2.
+- Benchmark failure does not abort the run: flow components become `n/a` and a warning is shown.
 - Symbols live only in `universe.csv` (owner, 2026-10-16); a leftover `universe.txt` or `sector_map.csv` is an error.
-  `expected_reads.csv` separates multiple items with `;`.
-- `run --symbol` and `--strategy` write `scan_<SYMBOL>.html` and `scan_strategy_<id>.html` so the full report is not overwritten.
 - Data-quality volume checks cover the charted period (`chart_bars`); missing-bar checks cover the whole window.
 - **Recent gaps (owner, 2026-10-16).** A symbol is skipped if any open in the last `gap_lookback_bars` (15,
   about 3 weeks) gapped more than `gap_skip_atr` (3) × ATR from the prior close. ATR is measured as of the prior
@@ -286,8 +229,8 @@ Residual differences against TradingView:
 - Yahoo's daily bar for the latest session can be revised for a short time after the close, hence the 30-minute
   buffer.
 - Volume is consolidated and differs slightly from some TradingView feeds.
-- Replays always use today's split basis: after a future split, absolute prices in older reports differ, but the
-  signals do not (they are scale-invariant). `run.json` records a data fingerprint per symbol.
+- Past sessions always use today's split basis: after a later split, absolute prices for an older session differ
+  from what that day showed, but the signals do not (they are scale-invariant).
 
 ## Open items for the owner
 

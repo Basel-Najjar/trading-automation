@@ -29,7 +29,7 @@ greater than or equal to each of the `pivot_window` bars after it. If several ba
 **Quality** = touches × 0.5^(bars since last touch / `recency_half_life_bars`). SMAs have a fixed quality
 (`sma_base_quality`).
 
-**Confluence.** Levels of different types whose zones overlap on a bar. The report merges overlapping zones
+**Confluence.** Levels of different types whose zones overlap on a bar. The scanner merges overlapping zones
 transitively and lists their `sources`. For scoring, a signal level's confluence is the number of distinct
 level types whose zones overlap its zone on the signal bar.
 

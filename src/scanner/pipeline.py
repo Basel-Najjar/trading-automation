@@ -6,19 +6,15 @@ structure for bar i is built only from bars ≤ min(i, last completed bar).
 
 from __future__ import annotations
 
-import hashlib
 import json
-import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from scanner import sessions
 from scanner.config import Config, Settings
-from scanner.data import ParquetCache, PriceProvider, YFinanceProvider, ensure_data, quality_checks, recent_gaps
+from scanner.data import DataResult, PriceProvider, cache_for, ensure_data, provider_for, quality_checks, recent_gaps
 from scanner.flow import period_returns, ratio_trend, state_of
 from scanner.indicators import compute_bars, find_pivots
 from scanner.levels import build_levels, confluence_zones, nearest_levels
@@ -46,21 +42,13 @@ class RunResult:
     strategies_enabled: list[str]
     strategies_skipped: list[tuple[str, str]]
     settings: Settings
-    hashes: dict[str, str] = field(default_factory=dict)
-    fingerprints: dict[str, str] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
-    runtime_s: float = 0.0
-    started: datetime | None = None
     benchmark: str = "SPY"
     sector_etfs: list[str] = field(default_factory=list)
-    focus_symbols: list[str] | None = None
 
-    @property
-    def exit_code(self) -> int:
-        if not self.analyses:
-            return 1
-        warn = any(d.severity in ("warning", "error") for d in self.diagnostics)
-        return 2 if (warn or self.skipped) else 0
+    def series(self, symbol: str) -> SymbolAnalysis | None:
+        """A symbol's analysis, whether it was scanned or loaded only as benchmark/sector context."""
+        return self.context.get(symbol) or self.analyses.get(symbol)
 
 
 # ----------------------------------------------------------------------------------------------
@@ -77,6 +65,11 @@ def build_tech(bars: Bars, cutoff: int, s: Settings, manual: list | None = None)
 
 def overrides_key(overrides: dict) -> str:
     return json.dumps(overrides, sort_keys=True) if overrides else ""
+
+
+def signals_for(sa: SymbolAnalysis, strategy) -> list:
+    """The signals a strategy is evaluated on: its overrides' variant, else the default signals."""
+    return sa.signal_variants.get(overrides_key(strategy.technical.overrides), sa.signals)
 
 
 def analyze_symbol(symbol: str, completed: pd.DataFrame, s: Settings, provisional: pd.DataFrame | None = None,
@@ -112,12 +105,6 @@ def analyze_symbol(symbol: str, completed: pd.DataFrame, s: Settings, provisiona
     return sa
 
 
-def _fingerprint(df: pd.DataFrame) -> str:
-    h = hashlib.sha256(np.ascontiguousarray(df[["open", "high", "low", "close", "volume"]].to_numpy()).tobytes())
-    h.update(",".join(d.isoformat() for d in df.index.date).encode())
-    return f"{df.index[-1].date().isoformat()}:{h.hexdigest()[:16]}"
-
-
 # ----------------------------------------------------------------------------------------------
 # Scan (pure)
 # ----------------------------------------------------------------------------------------------
@@ -136,14 +123,14 @@ def scan(
     quality: bool = True,
 ) -> RunResult:
     """Run stages [2]–[8] on preloaded completed frames, using only bars ≤ as_of."""
-    t0 = time.perf_counter()
     s = cfg.settings
     provisional = provisional or {}
     diags = list(diagnostics or [])
     notes: list[str] = []
     bench = s.data.benchmark
     universe = symbols or cfg.symbols
-    sector_etfs = sorted({e for sym in universe if (e := cfg.sector_for(sym))})
+    sector_etfs = _sector_etfs(cfg, universe)
+    context_syms = {bench, *sector_etfs}
 
     strategies = [st for st in cfg.strategies if strategy_ids is None or st.id in strategy_ids]
     active = [st for st in strategies if st.active]
@@ -154,11 +141,10 @@ def scan(
     analyses: dict[str, SymbolAnalysis] = {}
     context: dict[str, SymbolAnalysis] = {}
     skipped: list[tuple[str, str]] = []
-    fingerprints: dict[str, str] = {}
     windows: dict[str, pd.DataFrame] = {}
     is_prov = False
 
-    for sym in list(dict.fromkeys([*universe, bench, *sector_etfs])):
+    for sym in _with_context(universe, bench, sector_etfs):
         in_universe = sym in universe
         df = frames.get(sym)
         if df is None or df.empty:
@@ -188,18 +174,17 @@ def scan(
         if quality:
             # with a forming bar for as_of, completed data is current if it reaches the prior session
             ref = sessions.sessions_back(as_of, 1) if prov is not None else as_of
-            diags += quality_checks(sym, win, ref, s.data.stale_bar_sessions, s.report.chart_bars)
+            diags += quality_checks(sym, win, ref, s.data.stale_bar_sessions, s.display.chart_bars)
         gaps = recent_gaps(win if prov is None else pd.concat([win, prov]), s.indicators.atr_period,
                            s.data.gap_skip_atr, s.data.gap_lookback_bars)
         if gaps and in_universe:
             d, g_atr, g_pct = gaps[-1]
             skipped.append((sym, f"recent gap: {d.isoformat()} opened {g_atr:.1f} ATR ({g_pct:.1f}%) from the prior "
                                  f"close (> {s.data.gap_skip_atr:g} ATR within {s.data.gap_lookback_bars} bars)"))
-            if sym not in (bench, *sector_etfs):
+            if sym not in context_syms:
                 continue
             in_universe = False  # still needed as benchmark/sector context for flow
         windows[sym] = win
-        fingerprints[sym] = _fingerprint(win)
         try:
             sa = analyze_symbol(sym, win, s, prov, cfg.manual_levels.get(sym), variants)
         except Exception as e:  # per-symbol isolation (NF-5)
@@ -211,7 +196,7 @@ def scan(
         diags += sa.diagnostics
         is_prov = is_prov or sa.provisional
         (analyses if in_universe else context)[sym] = sa
-        if in_universe and sym in (bench, *sector_etfs):
+        if in_universe and sym in context_syms:
             context[sym] = sa
 
     # [6] relative strength / flow
@@ -247,8 +232,7 @@ def scan(
         sa = analyses[sym]
         evals[sym] = []
         for st in active:
-            sigs = sa.signal_variants.get(overrides_key(st.technical.overrides), sa.signals)
-            ev = evaluate_strategy(st, sa.trend.state, sigs, sa.flow, s, sa.provisional)
+            ev = evaluate_strategy(st, sa.trend.state, signals_for(sa, st), sa.flow, s, sa.provisional)
             evals[sym].append(ev)
             if ev.status is not Tri.FALSE:
                 cands.append(score_candidate(ev, sa, s))
@@ -261,8 +245,7 @@ def scan(
         as_of=as_of, requested_as_of=requested_as_of, provisional=is_prov, analyses=analyses, context=context,
         evals=evals, candidates=cands, watchlist=watch, skipped=skipped, diagnostics=diags,
         strategies_enabled=[st.id for st in active], strategies_skipped=skipped_strats, settings=s,
-        hashes=dict(cfg.hashes), fingerprints=fingerprints, notes=notes, runtime_s=time.perf_counter() - t0,
-        benchmark=bench, sector_etfs=sector_etfs, focus_symbols=symbols,
+        notes=notes, benchmark=bench, sector_etfs=sector_etfs,
     )
 
 
@@ -282,35 +265,41 @@ def resolve_as_of(requested: date | None, now: datetime, s: Settings) -> tuple[d
     return sessions.session_on_or_before(requested), False
 
 
+def history_start(session: date, s: Settings) -> date:
+    """First session to load so the analysis window (plus a small margin) ends on `session`."""
+    return sessions.sessions_back(session, s.window_bars + 10)
+
+
 def load_data(cfg: Config, symbols: list[str], start: date, end: date, now: datetime, *, refresh: bool = False,
-              live: bool = False, provider: PriceProvider | None = None):
+              live: bool = False, provider: PriceProvider | None = None) -> DataResult:
     s = cfg.settings
-    provider = provider or YFinanceProvider(s.data.price_adjustment, s.data.batch_size, s.data.max_retries)
-    cache = ParquetCache(Path(s.data.cache_dir), s.data.price_adjustment)
-    return ensure_data(symbols, provider, cache, start, end, now, refresh=refresh, want_provisional=live,
-                       rel_tol=s.data.cache_revision_rel_tol, close_buffer_minutes=s.data.close_buffer_minutes)
+    return ensure_data(symbols, provider or provider_for(s), cache_for(s), start, end, now, refresh=refresh,
+                       want_provisional=live, rel_tol=s.data.cache_revision_rel_tol,
+                       close_buffer_minutes=s.data.close_buffer_minutes)
+
+
+def _sector_etfs(cfg: Config, universe: list[str]) -> list[str]:
+    return sorted({e for sym in universe if (e := cfg.sector_for(sym))})
+
+
+def _with_context(universe: list[str], bench: str, sector_etfs: list[str]) -> list[str]:
+    return list(dict.fromkeys([*universe, bench, *sector_etfs]))
 
 
 def all_symbols(cfg: Config, symbols: list[str] | None = None) -> list[str]:
+    """The universe (or `symbols`) plus the benchmark and the sector ETFs they map to."""
     universe = symbols or cfg.symbols
-    etfs = sorted({e for sym in universe if (e := cfg.sector_for(sym))})
-    return list(dict.fromkeys([*universe, cfg.settings.data.benchmark, *etfs]))
+    return _with_context(universe, cfg.settings.data.benchmark, _sector_etfs(cfg, universe))
 
 
 def run_scan(cfg: Config, *, as_of: date | None = None, now: datetime | None = None,
              provider: PriceProvider | None = None, refresh: bool = False, symbols: list[str] | None = None,
              strategy_ids: list[str] | None = None) -> RunResult:
-    started = now or datetime.now(sessions.ET)
-    t0 = time.perf_counter()
+    """Load prices (cache first) for the session `as_of` resolves to, then `scan`."""
+    now = now or datetime.now(sessions.ET)
     s = cfg.settings
-    session, live = resolve_as_of(as_of, started, s)
-    start = sessions.sessions_back(session, s.window_bars + 10)
-    syms = all_symbols(cfg, symbols)
-    dr = load_data(cfg, syms, start, session, started, refresh=refresh, live=live, provider=provider)
-    frames = {k: v.completed for k, v in dr.data.items() if v.completed is not None}
-    prov = {k: v.provisional for k, v in dr.data.items() if v.provisional is not None}
-    res = scan(cfg, frames, session, provisional=prov, symbols=symbols, strategy_ids=strategy_ids,
-               diagnostics=dr.diagnostics, requested_as_of=as_of)
-    res.started = started
-    res.runtime_s = time.perf_counter() - t0
-    return res
+    session, live = resolve_as_of(as_of, now, s)
+    dr = load_data(cfg, all_symbols(cfg, symbols), history_start(session, s), session, now, refresh=refresh,
+                   live=live, provider=provider)
+    return scan(cfg, dr.completed_frames(), session, provisional=dr.provisional_frames(), symbols=symbols,
+                strategy_ids=strategy_ids, diagnostics=dr.diagnostics, requested_as_of=as_of)

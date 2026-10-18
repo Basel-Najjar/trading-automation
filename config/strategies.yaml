@@ -1,4 +1,4 @@
-# strategies.yaml — the strategy playbook. Edit freely; run `scanner validate` after changes.
+# strategies.yaml — the strategy playbook. Edit freely, or use the app's Criteria tab (it validates before saving).
 # Evaluated by the scanner:  bias, technical, scoring (weights replace settings.yaml → scoring.weights)
 # Any other key you add (e.g. notes:) is shown on cards as written and never evaluated.
 

@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from scanner.levels import confluence_types, project_next
+from scanner.levels import confluence_types, next_zone
 from scanner.models import (
+    DOWN_BIASES,
+    UP_BIASES,
     AlertPrice,
     Bars,
     Candidate,
@@ -28,8 +30,6 @@ from scanner.signals import REGISTRY
 from scanner.strategies import StrategyEval, watch_nears
 
 KIND_ORDER = {"break": 0, "hold": 1, "pattern": 2, "context": 3}
-UP_BIASES = ("bullish", "non_bearish")
-DOWN_BIASES = ("bearish", "non_bullish")
 
 
 def _clamp(x: float) -> float:
@@ -229,11 +229,7 @@ def rank(cands: list[Candidate]) -> list[Candidate]:
 
 
 def _zone_next(lv: Level, sa: SymbolAnalysis, s) -> tuple[float, float, float]:
-    t = sa.last_idx
-    nxt = project_next(lv, t)
-    a = float(sa.bars.atr[t])
-    k = s.levels.zone_atr_mult
-    return nxt, nxt - k * a, nxt + k * a
+    return next_zone(lv, sa.last_idx, sa.bars.atr, s.levels.zone_atr_mult)
 
 
 def build_alerts(sig: SignalResult | None, sa: SymbolAnalysis, s) -> list[AlertPrice]:
@@ -315,10 +311,10 @@ def build_watchlist(evals: dict[str, list[StrategyEval]], analyses: dict[str, Sy
     per_sym: dict[str, int] = {}
     out = []
     for w in ordered:
-        if per_sym.get(w.symbol, 0) >= s.report.max_watch_items_per_symbol:
+        if per_sym.get(w.symbol, 0) >= s.display.max_watch_items_per_symbol:
             continue
         per_sym[w.symbol] = per_sym.get(w.symbol, 0) + 1
         out.append(w)
-        if len(out) >= s.report.max_watch_items:
+        if len(out) >= s.display.max_watch_items:
             break
     return out

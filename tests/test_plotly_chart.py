@@ -8,9 +8,8 @@ from datetime import date, datetime, timedelta
 import numpy as np
 import pytest
 
-from scanner.charts import chart_levels
 from scanner.pipeline import scan
-from scanner.plotly_chart import Overlay, missing_sessions, price_figure
+from scanner.plotly_chart import Overlay, chart_levels, missing_sessions, price_figure
 
 D = date(2026, 9, 30)
 

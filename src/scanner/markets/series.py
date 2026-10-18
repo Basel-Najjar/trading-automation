@@ -9,22 +9,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from scanner import sessions
 from scanner.config import Settings
-from scanner.data import COLUMNS, DataResult, ParquetCache, PriceProvider, YFinanceProvider, ensure_data
+from scanner.data import COLUMNS, DataResult, PriceProvider, cache_for, ensure_data, provider_for
 from scanner.markets.config import BARS_PER_YEAR, RESOLUTIONS, MarketsConfig, SeriesSpec
 from scanner.models import Diagnostic
 
 MIN_BARS = 40  # fewer completed bars than this and a series is not analysed
-
-
-def cache_for(s: Settings) -> ParquetCache:
-    return ParquetCache(Path(s.data.cache_dir), s.data.price_adjustment)
 
 
 def history_sessions(mc: MarketsConfig) -> int:
@@ -38,8 +33,7 @@ def refresh_prices(mc: MarketsConfig, s: Settings, now: datetime | None = None, 
     now = now or datetime.now(sessions.ET)
     end = sessions.latest_completed_session(now, s.data.close_buffer_minutes)
     start = sessions.sessions_back(end, history_sessions(mc))
-    provider = provider or YFinanceProvider(s.data.price_adjustment, s.data.batch_size, s.data.max_retries)
-    return ensure_data(mc.symbols, provider, cache_for(s), start, end, now, refresh=refresh,
+    return ensure_data(mc.symbols, provider or provider_for(s), cache_for(s), start, end, now, refresh=refresh,
                        rel_tol=s.data.cache_revision_rel_tol, close_buffer_minutes=s.data.close_buffer_minutes)
 
 
@@ -72,8 +66,8 @@ def load_cached(mc: MarketsConfig, s: Settings) -> Prices:
 
 
 def prices_from(result: DataResult) -> Prices:
-    frames = {k: v.completed for k, v in result.data.items() if v.completed is not None and not v.completed.empty}
-    return Prices(frames, list(result.diagnostics), datetime.now().astimezone().isoformat(timespec="seconds"))
+    return Prices(result.completed_frames(non_empty=True), list(result.diagnostics),
+                  datetime.now().astimezone().isoformat(timespec="seconds"))
 
 
 # ----------------------------------------------------------------------------------------------

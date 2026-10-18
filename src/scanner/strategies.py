@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from scanner.config import Strategy
 from scanner.flow import classify_flow
-from scanner.models import FlowResult, NearResult, RuleResult, SignalResult, Tri
+from scanner.models import FlowResult, NearResult, RuleResult, SignalResult, Tri, unique_by_id
 
 
 @dataclass
@@ -87,13 +87,8 @@ def evaluate_strategy(strat: Strategy, trend_state: str, signals: list[SignalRes
         label = "ignored"
 
     status = Tri.all_([r.status for r in rules])
-    # de-duplicate qualifying signals (same signal object can appear in both lists)
-    seen, uniq = set(), []
-    for q in qualifying:
-        if id(q) not in seen:
-            seen.add(id(q))
-            uniq.append(q)
-    return StrategyEval(strat, status, rules, uniq, label, statuses)
+    # the same signal object can appear in both signal lists
+    return StrategyEval(strat, status, rules, unique_by_id(qualifying), label, statuses)
 
 
 def watch_nears(ev: StrategyEval, near_map: dict[str, list[NearResult]]) -> list[NearResult]:

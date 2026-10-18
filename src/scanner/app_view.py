@@ -1,6 +1,5 @@
 """View model for the Streamlit app: market overview, tickers split into Bullish / Bearish / Neutral candidates by
-their matched setups, the setup pane (rule one-liners, price ladder, chart), post-scan filtering and ticker
-descriptions.
+their matched setups, the setup pane (rule one-liners, price ladder, chart) and ticker descriptions.
 
 Pure functions over a `RunResult` (no Streamlit), so they are unit-tested like the rest of the scanner.
 """
@@ -14,53 +13,30 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from scanner.charts import chart_levels
 from scanner.config import Config, Strategy
 from scanner.data import Profile
-from scanner.models import Candidate, RuleResult, SignalResult, SymbolAnalysis, Tri
+from scanner.labels import LABELS, STATUS_ICON, TREND_ICON, change_pct, humanize, trend_text
+from scanner.models import (
+    DOWN_BIASES,
+    UP_BIASES,
+    Candidate,
+    RuleResult,
+    SignalResult,
+    SymbolAnalysis,
+    Tri,
+    unique_by_id,
+)
 from scanner.pipeline import RunResult
-from scanner.plotly_chart import Overlay, price_figure
-from scanner.report import level_dict, market_context
+from scanner.plotly_chart import Overlay, chart_levels, price_figure
 from scanner.strategies import StrategyEval, watch_nears
+from scanner.views import level_dict, market_context
 
 if TYPE_CHECKING:
     import plotly.graph_objects as go
 
-# ----------------------------------------------------------------------------------------------
-# Labels
-# ----------------------------------------------------------------------------------------------
+__all__ = ["LABELS", "STATUS_ICON", "TREND_ICON", "change_pct", "humanize", "trend_text"]  # re-exported from labels
 
-LABELS = {
-    # biases
-    "bullish": "Bullish", "bearish": "Bearish", "non_bearish": "Not bearish", "non_bullish": "Not bullish",
-    "neutral": "Neutral",
-    # flow
-    "with_flow": "With flow", "countertrend": "Against flow", "mixed": "Mixed", "ignored": "Flow ignored",
-    # trend
-    "uptrend": "Uptrend", "downtrend": "Downtrend", "range": "Range",
-    # rules
-    "trend": "Trend", "signals_all": "Required", "signals_any": "Trigger", "not_extended": "Not extended",
-    "alignment": "Flow",
-}
-TREND_ICON = {"uptrend": "▲", "downtrend": "▼", "range": "↔", "mixed": "≈"}
-BIAS_GROUPS = {"Bullish": ("bullish", "non_bearish"), "Bearish": ("bearish", "non_bullish"), "Neutral": ("neutral",)}
-STATUS_ICON = {Tri.TRUE: "✓", Tri.FALSE: "✗", Tri.PENDING: "⏳"}
-
-
-def humanize(token: str | None) -> str:
-    """Readable label for a config/scanner identifier (`non_bearish` → "Not bearish", `support_hold` →
-    "Support hold"). Unknown tokens get underscores replaced and the first letter capitalised."""
-    if not token:
-        return "n/a"
-    if token in LABELS:
-        return LABELS[token]
-    text = token.replace("_", " ")
-    return text[:1].upper() + text[1:]
-
-
-def trend_text(state: str) -> str:
-    icon = TREND_ICON.get(state)
-    return f"{icon} {humanize(state)}" if icon else humanize(state)
+BIAS_GROUPS = {"Bullish": UP_BIASES, "Bearish": DOWN_BIASES, "Neutral": ("neutral",)}
 
 
 # ----------------------------------------------------------------------------------------------
@@ -99,14 +75,6 @@ class SymbolRow:
         return self.rows[0]
 
     @property
-    def n_full(self) -> int:
-        return sum(1 for r in self.rows if r.total and r.met == r.total)
-
-    @property
-    def pending(self) -> bool:
-        return any(r.pending for r in self.rows)
-
-    @property
     def matches(self) -> list[StrategyRow]:
         """Strategies with a candidate (a full or pending-close match), best first."""
         return [r for r in self.rows if r.cand]
@@ -116,27 +84,28 @@ def _row_key(r: StrategyRow) -> tuple:
     return (-r.fraction, -r.score, r.ev.strategy.name)
 
 
-def strategy_rows(res: RunResult, symbol: str) -> list[StrategyRow]:
+def _candidates_by_symbol(res: RunResult) -> dict[str, dict[str, Candidate]]:
+    out: dict[str, dict[str, Candidate]] = {}
+    for c in res.candidates:
+        out.setdefault(c.symbol, {})[c.strategy_id] = c
+    return out
+
+
+def strategy_rows(res: RunResult, symbol: str, _cands: dict[str, Candidate] | None = None) -> list[StrategyRow]:
     """Every evaluated strategy for `symbol`, best % of rules met first. PENDING_CLOSE rules do not count as met."""
-    cands = {c.strategy_id: c for c in res.candidates if c.symbol == symbol}
+    cands = _candidates_by_symbol(res).get(symbol, {}) if _cands is None else _cands
     rows = [StrategyRow(ev, sum(r.status is Tri.TRUE for r in ev.rules), len(ev.rules),
                         sum(r.status is Tri.PENDING for r in ev.rules), cands.get(ev.strategy.id))
             for ev in res.evals.get(symbol, [])]
     return sorted(rows, key=_row_key)
 
 
-def change_pct(sa: SymbolAnalysis) -> float:
-    t = sa.last_idx
-    close = float(sa.bars.close[t])
-    prev = float(sa.bars.close[t - 1]) if t > 0 else close
-    return (close / prev - 1) * 100 if prev else 0.0
-
-
 def symbol_rankings(res: RunResult) -> list[SymbolRow]:
     """One row per analysed symbol with strategies; best fraction desc, then best candidate score, then symbol."""
     out = []
+    by_sym = _candidates_by_symbol(res)
     for sym, sa in res.analyses.items():
-        rows = strategy_rows(res, sym)
+        rows = strategy_rows(res, sym, by_sym.get(sym, {}))
         if not rows:
             continue
         out.append(SymbolRow(sym, rows, float(sa.bars.close[sa.last_idx]), change_pct(sa), sa.trend.state,
@@ -192,14 +161,16 @@ def direction_setups(row: SymbolRow, group: str | None = None) -> list[StrategyR
 
 
 def direction_groups(res: RunResult, symbols: list[str] | None = None, strategy_ids: list[str] | None = None,
-                     sectors: list[str] | None = None) -> dict[str, list[SymbolRow]]:
+                     sectors: list[str] | None = None,
+                     rankings: list[SymbolRow] | None = None) -> dict[str, list[SymbolRow]]:
     """Tickers with at least one matched setup, split by `direction` ("Bullish", "Bearish", "Neutral", every key
     present). Each row keeps its strategies within the filters (empty or None = all), and its direction is taken
-    from those. Order: best score among the setups in the ticker's direction desc, then symbol."""
+    from those. Order: best score among the setups in the ticker's direction desc, then symbol. `rankings`: an
+    already computed `symbol_rankings(res)`."""
     syms, secs = set(symbols or []) or None, set(sectors or []) or None
     sids = set(strategy_ids or []) or None
     out: dict[str, list[SymbolRow]] = {g: [] for g in BIAS_GROUPS}
-    for s in symbol_rankings(res):
+    for s in symbol_rankings(res) if rankings is None else rankings:
         if (syms is not None and s.symbol not in syms) or (secs is not None and s.sector not in secs):
             continue
         rows = [r for r in s.rows if _strategy_ok(r, sids)]
@@ -233,15 +204,15 @@ def pane_rows(row: SymbolRow) -> list[StrategyRow]:
 # ----------------------------------------------------------------------------------------------
 
 
-def overview(res: RunResult, cfg: Config) -> dict:
+def overview(res: RunResult, cfg: Config, rankings: list[SymbolRow] | None = None) -> dict:
     """Top-of-page summary: session, benchmark, counts (tickers per direction), and one entry per sector ETF with
-    its setup count."""
+    its setup count. `rankings`: an already computed `symbol_rankings(res)`."""
     market, sectors = market_context(res, cfg)
     with_cand = {c.symbol for c in res.candidates}
     for e in sectors:
         e["setups"] = sum(1 for m in e["members"] if m in with_cand)
     warnings = [d for d in res.diagnostics if d.severity != "info"]
-    directions = {g: len(rows) for g, rows in direction_groups(res).items()}
+    directions = {g: len(rows) for g, rows in direction_groups(res, rankings=rankings).items()}
     return {"as_of": res.as_of, "provisional": res.provisional, "notes": list(res.notes), "market": market,
             "sectors": sectors, "n_candidates": len(res.candidates), "n_symbols_with": len(with_cand),
             "n_symbols": len(res.analyses), "directions": directions, "watch": res.watchlist,
@@ -288,10 +259,10 @@ def rule_lines(ev: StrategyEval, sa: SymbolAnalysis, settings) -> list[RuleLine]
     tech = strat.technical
     s = settings.with_overrides(tech.overrides)
     hits: dict[str, list[SignalResult]] = {}
-    for h in ev.qualifying:  # identity, not ==: dataclass equality would compare numpy arrays
-        seen = hits.setdefault(h.name, [])
-        if h.status is not Tri.FALSE and not any(x is h for x in seen):
-            seen.append(h)
+    for h in unique_by_id(ev.qualifying):
+        hits.setdefault(h.name, [])
+        if h.status is not Tri.FALSE:
+            hits[h.name].append(h)
     out = []
     for r in ev.rules:
         out.append(RuleLine(r.rule, humanize(r.rule), r.status, _rule_summary(r, ev, sa, s, hits), r.detail,
@@ -351,16 +322,13 @@ def price_ladder(alerts: list[tuple[str, float, str]], close: float) -> list[dic
     return sorted(rows, key=lambda r: -r["price"])
 
 
-APP_CHART_BARS = 60  # the app opens the chart on fewer bars than the report, so the levels near price stay legible
+APP_CHART_BARS = 60  # the chart opens on fewer bars than `display.chart_bars`, so the levels near price stay legible
 
 
 def signal_hits(ev: StrategyEval, cand: Candidate | None) -> list[dict]:
     """One row per signal that fired for this setup (the structured form of the rule evidence)."""
-    out, seen = [], []
-    for h in (cand.signals if cand else ev.qualifying):
-        if h.status is Tri.FALSE or any(x is h for x in seen):
-            continue
-        seen.append(h)
+    out = []
+    for h in unique_by_id([h for h in (cand.signals if cand else ev.qualifying) if h.status is not Tri.FALSE]):
         out.append({"Signal": humanize(h.name), "Level": h.level.label if h.level else "",
                     "Price": h.level.value(h.bar_idx) if h.level else None, "Date": h.date, "Bars ago": h.age,
                     "Pending": "pending close" if h.status is Tri.PENDING else ""})
@@ -370,18 +338,14 @@ def signal_hits(ev: StrategyEval, cand: Candidate | None) -> list[dict]:
 OVERLAY_COLORS = {"etf": "#12a1a1", "benchmark": "#8d8d8d", "ratio": "#c0399b"}
 
 
-def _series(res: RunResult, symbol: str) -> SymbolAnalysis | None:
-    return res.context.get(symbol) or res.analyses.get(symbol)
-
-
 def overlay_choices(res: RunResult, symbol: str) -> dict[str, str]:
     """Comparison lines available for `symbol` ({kind: label}): its sector ETF, the benchmark and the ETF/benchmark
     ratio (the series the sector flow is read from). A series is offered only when it was loaded and is not the
     symbol itself."""
     sa = res.analyses[symbol]
     etf, bench = sa.sector_etf, res.benchmark
-    has_etf = bool(etf) and etf != symbol and _series(res, etf) is not None
-    has_bench = bench != symbol and _series(res, bench) is not None
+    has_etf = bool(etf) and etf != symbol and res.series(etf) is not None
+    has_bench = bench != symbol and res.series(bench) is not None
     out = {}
     if has_etf:
         out["etf"] = f"{etf} (sector)"
@@ -393,7 +357,7 @@ def overlay_choices(res: RunResult, symbol: str) -> dict[str, str]:
 
 
 def _aligned_close(res: RunResult, other: str, dates: list) -> np.ndarray:
-    o = _series(res, other)
+    o = res.series(other)
     by_date = {d: float(c) for d, c in zip(o.bars.dates[:o.last_idx + 1], o.bars.close[:o.last_idx + 1], strict=True)}
     return np.array([by_date.get(d, np.nan) for d in dates], dtype=float)
 
@@ -425,7 +389,7 @@ def symbol_chart(res: RunResult, symbol: str) -> go.Figure:
     sigs = [h for r in strategy_rows(res, symbol) for h in (r.cand.signals if r.cand else r.ev.qualifying)]
     levels = chart_levels(sa, [h.level for h in sigs if h.level is not None])
     bars = sorted({h.bar_idx for h in sigs})
-    return price_figure(sa, levels, bars, min(s.report.chart_bars, APP_CHART_BARS), s.levels.zone_atr_mult,
+    return price_figure(sa, levels, bars, min(s.display.chart_bars, APP_CHART_BARS), s.levels.zone_atr_mult,
                         s.indicators.rsi_overbought, s.indicators.rsi_oversold,
                         overlays=chart_overlays(res, symbol, list(overlay_choices(res, symbol))))
 
@@ -474,30 +438,6 @@ def strategy_recipe(stg: Strategy) -> list[tuple[str, str]]:
         out.append(("Not", "overbought" if ne == "up" else "oversold"))
     out.append(("Flow", {"soft": "scored", "required": "required", "ignore": "ignored"}[tech.alignment]))
     return out
-
-
-# ----------------------------------------------------------------------------------------------
-# Filtering for the HTML report
-# ----------------------------------------------------------------------------------------------
-
-
-def filtered_result(res: RunResult, symbols: list[str] | None, strategy_ids: list[str] | None) -> RunResult:
-    """A copy of a full scan limited to the picked symbols/strategies (empty or None = all), for the HTML report."""
-    syms = set(symbols) if symbols else None
-    sids = set(strategy_ids) if strategy_ids else None
-
-    def keep(sym: str, sid: str) -> bool:
-        return (syms is None or sym in syms) and (sids is None or sid in sids)
-
-    evals = {sym: [ev for ev in evs if sids is None or ev.strategy.id in sids] for sym, evs in res.evals.items()}
-    watch = []
-    for w in res.watchlist:
-        strats = [s for s in w.strategies if keep(w.symbol, s[0])]
-        if strats:
-            watch.append(replace(w, strategies=strats))
-    return replace(res, evals=evals, candidates=[c for c in res.candidates if keep(c.symbol, c.strategy_id)],
-                   watchlist=watch, strategies_enabled=[s for s in res.strategies_enabled if sids is None or s in sids],
-                   focus_symbols=list(symbols) if symbols else None)
 
 
 # ----------------------------------------------------------------------------------------------

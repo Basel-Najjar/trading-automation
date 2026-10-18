@@ -1,4 +1,4 @@
-"""US equity trading calendar (XNYS): completed sessions, provisional bars, replay date snapping."""
+"""US equity trading calendar (XNYS): completed sessions, provisional bars, snapping a date to its session."""
 
 from __future__ import annotations
 
@@ -58,13 +58,6 @@ def latest_completed_session(now: datetime, buffer_minutes: int = 30) -> date:
     if now_et < session_close(d) + timedelta(minutes=buffer_minutes):
         d = sessions_back(d, 1)
     return d
-
-
-def is_provisional(bar_date: date, now: datetime, buffer_minutes: int = 30) -> bool:
-    """A bar is provisional while its session has not closed (+ buffer) yet."""
-    if not is_session(bar_date):
-        return False
-    return now.astimezone(ET) < session_close(bar_date) + timedelta(minutes=buffer_minutes)
 
 
 def live_session(now: datetime) -> date | None:

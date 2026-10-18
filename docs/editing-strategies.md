@@ -53,18 +53,13 @@ shown on the candidate card exactly as written and never evaluated. The old play
 
 ## After every edit
 
-```
-uv run scanner validate --offline
-```
-
-Typos are caught with the file, line number and a suggestion, for example:
+Save from the app's **Criteria** tab (**Edit rules**), which validates before writing. If you edit the file by
+hand, reload the app: it validates `config/` on load and lists any errors on the page. Typos are caught with the
+file, line number and a suggestion, for example:
 
 ```
 ERROR strategies.yaml:66: strategies[2] (bull_put_spread).technical.signals_any[0]: unknown signal 'suport_hold' — did you mean 'support_hold'?
 ```
 
-To check how a change behaves on a chart you already know, replay that date:
-
-```
-uv run scanner explain --symbol AAPL --strategy bull_put_spread --as-of 2026-09-15
-```
+To check how a change behaves on a chart you already know, pick that date as the app's session date, press **Run
+analysis**, open the symbol and pick the strategy: the setup pane lists every rule with its evidence.

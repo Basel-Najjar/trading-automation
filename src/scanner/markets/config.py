@@ -16,7 +16,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import Field, ValidationError, field_validator, model_validator
 
-from scanner.config import Issue, Settings, _clean_symbol, _line_for, _pydantic_issues, _read_yaml, _Strict
+from scanner.config import Issue, Settings, Strict, clean_symbol, has_errors, line_for, pydantic_issues, read_yaml
 
 MARKETS = "markets.yaml"
 RESOLUTIONS = ("daily", "weekly")
@@ -47,7 +47,7 @@ class SeriesSpec:
 
 
 def parse_series(text: str) -> SeriesSpec:
-    parts = [_clean_symbol(p) for p in str(text).split("/")]
+    parts = [clean_symbol(p) for p in str(text).split("/")]
     if not all(parts) or len(parts) > 2:
         raise ValueError(f"'{text}' is not a ticker or a ratio NUM/DEN")
     if any(c.isspace() for p in parts for c in p):
@@ -76,17 +76,17 @@ def _series_list(v: Any) -> list[str]:
 # ----------------------------------------------------------------------------------------------
 
 
-class RrgParams(_Strict):
+class RrgParams(Strict):
     window: int = Field(10, ge=2)  # bars in the RS-Ratio / RS-Momentum z-score windows
     tail: int = Field(10, ge=1)  # bars of trail drawn per member
 
 
-class PcaParams(_Strict):
+class PcaParams(Strict):
     window: int = Field(52, ge=8)  # bars per rolling correlation window
     components: int = Field(3, ge=1)
 
 
-class ResolutionParams(_Strict):
+class ResolutionParams(Strict):
     display_years: float = Field(gt=0)
     history_years: float = Field(gt=0)  # analysed history (≥ display: warm-up for SMA200, ATR, pivots)
     rrg: RrgParams = Field(default_factory=RrgParams)
@@ -110,7 +110,7 @@ DEFAULT_RESOLUTIONS: dict[str, dict[str, Any]] = {
 }
 
 
-class RrgList(_Strict):
+class RrgList(Strict):
     benchmark: str = "SPY"
     members: list[str] = Field(default_factory=list)
 
@@ -133,7 +133,7 @@ class RrgList(_Strict):
         return self
 
 
-class PcaList(_Strict):
+class PcaList(Strict):
     members: list[str] = Field(default_factory=list)
 
     _members = field_validator("members", mode="before")(_series_list)
@@ -145,7 +145,7 @@ class PcaList(_Strict):
         return self
 
 
-class MarketsConfig(_Strict):
+class MarketsConfig(Strict):
     levels: list[str]
     rrg: RrgList
     pca: PcaList
@@ -219,7 +219,7 @@ def _model_issues(err: ValidationError, lines: dict[tuple, int]) -> list[Issue]:
         msg = e["msg"].removeprefix("Value error, ")
         if e["type"] == "extra_forbidden":
             msg = f"unknown key '{loc[-1] if loc else '?'}'"
-        out.append(Issue(MARKETS, _line_for(lines, loc), ".".join(str(x) for x in loc), msg))
+        out.append(Issue(MARKETS, line_for(lines, loc), ".".join(str(x) for x in loc), msg))
     return out
 
 
@@ -229,7 +229,7 @@ def load_markets(root: Path, base: Settings | None = None) -> tuple[MarketsConfi
     issues: list[Issue] = []
     if not path.exists():
         return None, [Issue(MARKETS, None, "", "file missing — the Markets page needs it")]
-    data, lines = _read_yaml(path, issues)
+    data, lines = read_yaml(path, issues)
     if issues:
         return None, issues
     if not isinstance(data, dict):
@@ -243,15 +243,15 @@ def load_markets(root: Path, base: Settings | None = None) -> tuple[MarketsConfi
         try:
             settings_for(base, params)
         except ValidationError as e:
-            issues += _pydantic_issues(e, MARKETS, lines, ("resolutions", name, "settings"),
+            issues += pydantic_issues(e, MARKETS, lines, ("resolutions", name, "settings"),
                                        f"resolutions.{name}.settings.")
     for name in RESOLUTIONS:
         p = mc.resolutions[name]
         if mc.bars(name, p.history_years) < 2 * p.pca.window:
-            issues.append(Issue(MARKETS, _line_for(lines, ("resolutions", name, "pca")), f"resolutions.{name}.pca",
+            issues.append(Issue(MARKETS, line_for(lines, ("resolutions", name, "pca")), f"resolutions.{name}.pca",
                                 "history holds fewer than two PCA windows; the correlation change is n/a",
                                 "warning"))
-    if any(i.severity == "error" for i in issues):
+    if has_errors(issues):
         return None, issues
     return mc, issues
 
@@ -316,6 +316,6 @@ def save_markets(root: Path, levels: list[Any], benchmark: str, rrg_members: lis
     with tempfile.TemporaryDirectory() as tmp:
         (Path(tmp) / MARKETS).write_text(text, encoding="utf-8")
         _, issues = load_markets(Path(tmp), base)
-    if not any(i.severity == "error" for i in issues):
+    if not has_errors(issues):
         path.write_text(text, encoding="utf-8")
     return issues

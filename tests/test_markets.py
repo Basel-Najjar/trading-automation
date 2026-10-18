@@ -1,4 +1,4 @@
-"""Markets page: config, series (ratios, weekly bars, cache), structure, RRG, PCA, export and the page itself."""
+"""Markets page: config, series (ratios, weekly bars, cache), structure, RRG, PCA and the page itself."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from conftest import ROOT, FakeProvider, random_frame, session_index
 from scanner import sessions
 from scanner.config import Settings
 from scanner.markets.config import MARKETS, MarketsConfig, load_markets, parse_series, save_markets, settings_for
-from scanner.markets.export import export_name, render_markets_html
 from scanner.markets.pca import _align, compute_pca
 from scanner.markets.rrg import compute_rrg, quadrant, rrg_series
 from scanner.markets.run import run_markets
@@ -289,21 +288,17 @@ def test_sign_alignment_follows_the_previous_window():
 
 
 # ----------------------------------------------------------------------------------------------
-# Run + export
+# Run
 # ----------------------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("res", ["daily", "weekly"])
-def test_run_and_export(frames, res):
+def test_run(frames, res):
     r = run_markets(_mc(), Settings(), Prices(frames), res)
     assert set(r.analyses) == {"SPY", "XLK/SPY"} and not r.diagnostics
     assert set(r.rrg.tails) == {"XLK", "XLE", "QQQ/TLT"}
     assert r.pca.members == ["SPY", "TLT", "GLD", "XLK/SPY"]
     assert r.display_bars == (252 if res == "daily" else 260)
-    html = render_markets_html(r)
-    assert html.startswith("<!doctype html>") and "QQQ/TLT" in html and "Largest correlation shifts" in html
-    assert html.count("plotly.js v") == 1  # embedded once, offline
-    assert export_name(r) == f"markets_{END.isoformat()}_{res}.html"
 
 
 # ----------------------------------------------------------------------------------------------

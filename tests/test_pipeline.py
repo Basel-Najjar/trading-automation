@@ -11,19 +11,30 @@ import pytest
 
 from conftest import FakeProvider, random_frame
 from scanner import pipeline, sessions
-from scanner.models import Tri
+from scanner.models import Tri, jsonable
 from scanner.pipeline import run_scan, scan
-from scanner.report import candidate_dict, level_dict, signal_dict, watch_dict
+from scanner.views import level_dict
+
+
+def _signal(x) -> dict:
+    return {"name": x.name, "status": x.status.value, "age": x.age, "date": x.date,
+            "level_id": x.level.id if x.level else None, "evidence": jsonable(x.evidence)}
 
 
 def snapshot(res) -> str:
     k = res.settings.levels.zone_atr_mult
     out = {
         "as_of": res.as_of.isoformat(),
-        "candidates": [candidate_dict(c, res.analyses[c.symbol], k) for c in res.candidates],
-        "watch": [watch_dict(w) for w in res.watchlist],
+        "candidates": [{"symbol": c.symbol, "strategy": c.strategy_id, "status": c.status.value, "score": c.score,
+                        "rank": c.rank, "primary": _signal(c.primary) if c.primary else None,
+                        "signals": [_signal(x) for x in c.signals],
+                        "rules": [(r.rule, r.status.value, r.detail, r.evidence) for r in c.rules],
+                        "components": [(x.name, x.raw, x.weight, x.points, x.note) for x in c.components],
+                        "alerts": [(a.label, a.price, a.meaning) for a in c.alerts]} for c in res.candidates],
+        "watch": [(w.symbol, w.strategies, w.near.signal, w.near.description, w.near.distance_atr,
+                   [(a.label, a.price) for a in w.near.triggers]) for w in res.watchlist],
         "symbols": {s: {"trend": sa.trend.state, "reason": sa.trend.reason,
-                        "signals": [signal_dict(x) for x in sa.signals],
+                        "signals": [_signal(x) for x in sa.signals],
                         "levels": [level_dict(lv, sa, k) for lv in sa.levels],
                         "flow": sa.flow.components() if sa.flow else None}
                     for s, sa in sorted(res.analyses.items())},
@@ -80,7 +91,7 @@ def test_insufficient_history_and_missing_data(cfg, market_frames):
     res = scan(cfg, frames, D)
     reasons = dict(res.skipped)
     assert "insufficient history" in reasons["CCC"] and reasons["BBB"] == "no price data"
-    assert res.exit_code == 2 and "AAA" in res.analyses
+    assert "AAA" in res.analyses
 
 
 def _gap(df: pd.DataFrame, bars_before_d: int, mult: float = 1.15) -> pd.DataFrame:

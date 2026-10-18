@@ -135,16 +135,19 @@ def test_unmapped_symbol_warns(config_dir):
     assert any("CCC" in w and "no sector_etf" in w for w in warnings)
 
 
-def test_expected_reads_parsing(config_dir):
-    (config_dir / "expected_reads.csv").write_text(
-        "date,symbol,expected,note\n2026-09-15,aaa,uptrend;support_hold,ok\n2026-09-16,BBB,suport_hold,\n",
-        encoding="utf-8")
+def test_retired_report_and_replay_config_is_rejected(config_dir):
+    p = config_dir / "settings.yaml"
+    base = p.read_text(encoding="utf-8")
+    p.write_text(base + "\nreport:\n  chart_bars: 150\n", encoding="utf-8")
     cfg, errors, _ = _issues(config_dir)
-    assert any("did you mean 'support_hold'" in e for e in errors)
-    (config_dir / "expected_reads.csv").write_text(
-        "date,symbol,expected,note\n2026-09-15,aaa,uptrend;support_hold,ok\n", encoding="utf-8")
+    assert cfg is None and any("report" in e and "display:" in e for e in errors)
+    p.write_text(base + "\nreplay:\n  forward_horizons: [3]\n", encoding="utf-8")
     cfg, errors, _ = _issues(config_dir)
-    assert cfg.expected_reads[0].expected == ["uptrend", "support_hold"] and cfg.expected_reads[0].symbol == "AAA"
+    assert cfg is None and any("replay was removed" in e for e in errors)
+    p.write_text(base, encoding="utf-8")
+    (config_dir / "expected_reads.csv").write_text("date,symbol,expected\n", encoding="utf-8")
+    cfg, errors, _ = _issues(config_dir)
+    assert cfg is None and any("expected_reads.csv" in e for e in errors)
 
 
 def test_manual_levels_validation(config_dir):

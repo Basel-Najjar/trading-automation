@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 
 import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
 
 from scanner.models import Bars, Pivot
 
@@ -85,18 +86,17 @@ def find_pivots(high: np.ndarray, low: np.ndarray, dates: list[date], window: in
     high, low = np.asarray(high, dtype=float), np.asarray(low, dtype=float)
     n = len(high)
     last = n - 1 if last_usable is None else min(last_usable, n - 1)
-    highs: list[Pivot] = []
-    lows: list[Pivot] = []
     w = window
-    for i in range(w, last - w + 1):
-        lh, rh = high[i - w:i], high[i + 1:i + w + 1]
-        if not (np.isnan(high[i]) or np.isnan(lh).any() or np.isnan(rh).any()):
-            if high[i] > lh.max() and high[i] >= rh.max():
-                highs.append(Pivot("high", i, dates[i], float(high[i]), i + w))
-        ll, rl = low[i - w:i], low[i + 1:i + w + 1]
-        if not (np.isnan(low[i]) or np.isnan(ll).any() or np.isnan(rl).any()):
-            if low[i] < ll.min() and low[i] <= rl.min():
-                lows.append(Pivot("low", i, dates[i], float(low[i]), i + w))
+    idx = np.arange(w, last - w + 1)  # candidate bars: a full window on each side, confirmed by `last`
+    if not len(idx):
+        return [], []
+    # windows[j] covers bars j .. j+w-1; a NaN anywhere makes its max/min NaN, and NaN comparisons are False
+    hw, lw = sliding_window_view(high, w), sliding_window_view(low, w)
+    hmax, lmin = hw.max(axis=1), lw.min(axis=1)
+    is_high = (high[idx] > hmax[idx - w]) & (high[idx] >= hmax[idx + 1])
+    is_low = (low[idx] < lmin[idx - w]) & (low[idx] <= lmin[idx + 1])
+    highs = [Pivot("high", i, dates[i], float(high[i]), i + w) for i in idx[is_high].tolist()]
+    lows = [Pivot("low", i, dates[i], float(low[i]), i + w) for i in idx[is_low].tolist()]
     return highs, lows
 
 

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from scanner.levels import project_next
+from scanner.levels import next_zone
 from scanner.models import SIGNAL_NAMES, AlertPrice, Bars, Level, NearResult, SignalResult, Tech, Tri
 
 Firing = tuple[Level | None, dict]
@@ -193,8 +193,7 @@ def _hold_near(tech: Tech, i: int, s, side: str) -> list[NearResult]:
     for lv in tech.levels:
         if lv.id in already or not _valid(lv, i):
             continue
-        nxt = project_next(lv, i)
-        zlo, zhi = nxt - k * a, nxt + k * a
+        nxt, zlo, zhi = next_zone(lv, i, b.atr, k)
         # (a) zone tested within a window that is still open next bar, confirmation not yet printed
         t = _hold_test(tech, lv, i, s, side, i)
         if t is not None and t > i + 1 - s.signals.hold_test_lookback:
@@ -276,6 +275,15 @@ def _break_conditions(tech: Tech, lv: Level, i: int, s, side: str) -> dict | Non
 
 
 def _break(tech: Tech, i: int, s, side: str) -> list[Firing]:
+    """Breaks of `side` levels on bar i. Memoised on the structure: holds and near-misses re-ask the same question
+    (keyed on every setting a break reads, so per-strategy signal overrides stay separate)."""
+    key = ("break", i, side, s.levels.zone_atr_mult, tuple(s.signals.model_dump().items()))
+    if key not in tech.memo:
+        tech.memo[key] = _find_breaks(tech, i, s, side)
+    return tech.memo[key]
+
+
+def _find_breaks(tech: Tech, i: int, s, side: str) -> list[Firing]:
     b, k = tech.bars, s.levels.zone_atr_mult
     out = []
     for lv in tech.levels:
@@ -324,8 +332,7 @@ def _break_near(tech: Tech, i: int, s, side: str) -> list[NearResult]:
         c = _break_conditions(tech, lv, i, s, side)
         if c is None:
             continue
-        nxt = project_next(lv, i)
-        zlo, zhi = nxt - k * a, nxt + k * a
+        nxt, zlo, zhi = next_zone(lv, i, b.atr, k)
         edge = zlo if side == "support" else zhi
         if c["in_zone"] and c["prior_side_next"]:
             dist = (b.close[i] - zlo) / a if side == "support" else (zhi - b.close[i]) / a

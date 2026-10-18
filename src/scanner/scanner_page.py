@@ -6,10 +6,9 @@ detail:
    group), with filters. Every active strategy is still evaluated against every ticker.
 3. Setup pane beside the list: direction, setups summarised by direction, chart, strategy switcher, key numbers,
    one line per rule and a price ladder.
-4. Evidence tabs in the pane (why, levels, about), plus links to the strategy's criteria and an
-   export of the HTML report for that setup.
+4. Evidence tabs in the pane (why, levels, about), plus a link to the strategy's criteria.
 
-Other tabs: the filtered HTML report, the scan criteria (with rule editing) and the symbol universe.
+Other tabs: the scan criteria (with rule editing) and the symbol universe.
 
 Rendered by the navigation shell in app.py (run from the repository root:  uv run streamlit run src/scanner/app.py).
 """
@@ -33,7 +32,6 @@ from scanner.app_view import (
     direction,
     direction_groups,
     direction_setups,
-    filtered_result,
     humanize,
     overview,
     pane_rows,
@@ -63,38 +61,38 @@ from scanner.criteria import global_criteria, strategy_criteria
 from scanner.data import Profile, fetch_profiles
 from scanner.models import SIGNAL_NAMES, Tri
 from scanner.pipeline import RunResult, run_scan
-from scanner.report import render_html, suffix_for
+from scanner.ui import picked_rows, show_errors, table_height
 
 CONFIG_DIR = Path(os.environ.get("SCANNER_CONFIG_DIR", "config"))
-REPORT_HEIGHT = 1600
 TABLE_ROWS = 18  # visible rows in the opportunity list before it scrolls
-TAB_RESULTS, TAB_REPORT, TAB_CRITERIA, TAB_CONFIG = "Results", "Report", "Criteria", "Config"
+TAB_RESULTS, TAB_CRITERIA, TAB_CONFIG = "Results", "Criteria", "Config"
 DIRECTION_ICON = {"Bullish": "▲", "Bearish": "▼", "Neutral": "↔"}
 DIRECTION_BADGE = {"Bullish": ":green-badge[▲ Bullish]", "Bearish": ":red-badge[▼ Bearish]",
                    "Neutral": ":gray-badge[↔ Neutral]"}
 STATUS_MD = {Tri.TRUE: ":green[**✓**]", Tri.FALSE: ":red[**✗**]", Tri.PENDING: ":orange[**⏳**]"}
 TREND_COLOR = {"uptrend": "green", "downtrend": "red"}
+DISCLAIMER = ("Automated technical screening based on the owner's predefined rules; not investment advice. "
+              "Manual validation is required before any trade.")
 CSS = """<style>
-[data-testid="stMainBlockContainer"] { padding-top: 2.5rem; }
 .scn-muted { opacity: .6; font-weight: 400; }
 [data-testid="stMetricValue"] { font-size: 1.45rem; }
 /* the opportunity list stays in view while the setup pane beside it scrolls */
-[data-testid="stLayoutWrapper"]:has(> .st-key-opps_list) { position: sticky; top: 3.75rem; z-index: 1; }
+[data-testid="stLayoutWrapper"]:has(> .st-key-opps_list) {
+  position: sticky; top: var(--app-header-height, 3.75rem); z-index: 1;
+}
 </style>"""
 
 
 def _load() -> Config | None:
     cfg, issues = load_config(CONFIG_DIR)
-    errors = [i for i in issues if i.severity == "error"]
-    if errors or cfg is None:
-        st.error(f"Configuration in `{CONFIG_DIR.resolve()}` is invalid:\n\n" + "\n".join(f"- {i}" for i in errors))
+    if show_errors(f"Configuration in `{CONFIG_DIR.resolve()}` is invalid:", issues) or cfg is None:
         return None
     return cfg
 
 
 def _clear_results() -> None:
     for key in list(st.session_state):
-        if key in ("res", "cfg", "selected_symbol", "report_cache", "profiles", "charts") or \
+        if key in ("res", "cfg", "selected_symbol", "shown_group", "profiles", "charts") or \
                 str(key).startswith(("strat_", "opps_", "_pick_", "watch_table")):
             st.session_state.pop(key, None)
 
@@ -110,7 +108,6 @@ def _run(cfg: Config, as_of: date, refresh: bool) -> None:
     st.session_state["res"] = res
     st.session_state["charts"] = {}  # figures belong to a run
     st.session_state["cfg"] = cfg
-    st.session_state["report_cache"] = {}
     with st.spinner("Loading ticker descriptions…"):
         st.session_state["profiles"] = fetch_profiles(sorted(res.analyses), Path(cfg.settings.data.cache_dir),
                                                       refresh=refresh)
@@ -139,7 +136,7 @@ def _trend_md(state: str) -> str:
 
 
 # ----------------------------------------------------------------------------------------------
-# Selection (the list, the top strip and the watch list all pick the symbol shown in the setup pane)
+# Selection (the list and the watch list both pick the symbol shown in the setup pane)
 # ----------------------------------------------------------------------------------------------
 
 
@@ -159,7 +156,7 @@ def _select(symbol: str, strategy_id: str | None = None, clear: str | None = Non
 def _apply_table_pick(key: str, picks: list[tuple[str, str | None]]) -> None:
     """Apply a row picked in the dataframe `key` (read from its state before it renders, so everything drawn
     above it already shows the pick). A pick is applied once, so later picks elsewhere are not overridden."""
-    rows = ((st.session_state.get(key) or {}).get("selection") or {}).get("rows") or []
+    rows = picked_rows(key)
     pick = picks[rows[0]] if rows and rows[0] < len(picks) else None
     if pick is not None and st.session_state.get(f"_pick_{key}") != pick:
         st.session_state[f"_pick_{key}"] = pick
@@ -288,7 +285,7 @@ def _opportunity_table(data: list[dict], picks: list[tuple[str, str | None]], gr
     df.insert(0, "", ["▶" if sym == selected else "" for sym, _ in picks])
     st.dataframe(
         df, hide_index=True, on_select="rerun", selection_mode="single-row", key=key,
-        height=min(len(df), TABLE_ROWS) * 35 + 38,
+        height=table_height(len(df), TABLE_ROWS),
         column_config={
             "": st.column_config.TextColumn(width=16),
             "Symbol": st.column_config.TextColumn(width=62),
@@ -386,8 +383,7 @@ def _evidence_tabs(d: dict, cfg: Config, symbol: str, sid: str) -> None:
         st.caption(f"Sector ETF: {d['sector'] or 'n/a'} · ATR {d['atr']:.2f}")
 
 
-def _setup(res: RunResult, cfg: Config, symbol: str) -> None:
-    srow = next((r for r in symbol_rankings(res) if r.symbol == symbol), None)
+def _setup(res: RunResult, cfg: Config, srow: SymbolRow | None, symbol: str) -> None:
     if srow is None:
         st.info(f"No strategies were evaluated for {symbol}.")
         return
@@ -429,11 +425,6 @@ def _setup(res: RunResult, cfg: Config, symbol: str) -> None:
                     width="stretch")
         st.button("Criteria", icon=":material/rule:", type="tertiary", key=f"crit_{symbol}_{sid}",
                   on_click=_to_criteria, args=(sid,), help="How this strategy is scanned")
-        st.download_button(
-            "Export", data=lambda: render_html(filtered_result(res, [symbol], [sid]), cfg, deep=True),
-            file_name=f"scan_{res.as_of.isoformat()}{suffix_for([symbol], [sid])}.html", mime="text/html",
-            icon=":material/download:", on_click="ignore", type="tertiary", key=f"export_{symbol}_{sid}",
-            help="The HTML report for this setup")
 
     m = st.columns(4)
     m[0].metric("Score", f"{row.cand.score:.1f}" if row.cand else "—", border=True,
@@ -458,17 +449,24 @@ def _results() -> None:
         st.info("Pick a session date above and press **Run analysis**. Every run scans all enabled symbols and "
                 "active strategies; filtering happens afterwards.", icon=":material/play_circle:")
         return
-    ov = overview(res, cfg)
+    rankings = symbol_rankings(res)  # once per rerun: the overview, the list and the pane all use it
+    ov = overview(res, cfg, rankings)
     _apply_table_pick("watch_table", _watch_rows(ov)[1])
     _overview(ov)
 
     f = _filters(res, cfg)
-    groups = direction_groups(res, f["symbols"], f["strategy_ids"], f["sectors"])
+    groups = direction_groups(res, f["symbols"], f["strategy_ids"], f["sectors"], rankings)
     left, right = st.columns([5, 7], gap="large")
     with left, st.container(key="opps_list"):
         group = _direction_pick(groups)
         data, picks = _list_rows(groups[group], group)
         key = _table_key(f, group)
+        if group != st.session_state.get("shown_group", group):  # switched group: open its top ticker
+            if picks:
+                _select(*picks[0])
+            else:
+                st.session_state.pop("selected_symbol", None)
+        st.session_state["shown_group"] = group
         _apply_table_pick(key, picks)
         selected = st.session_state.get("selected_symbol")
         if selected not in res.analyses:
@@ -478,38 +476,8 @@ def _results() -> None:
         _opportunity_table(data, picks, group, key, selected)
     with right:
         if selected:
-            _setup(res, cfg, selected)
-
-
-# ----------------------------------------------------------------------------------------------
-# Report
-# ----------------------------------------------------------------------------------------------
-
-
-def _report() -> None:
-    res: RunResult | None = st.session_state.get("res")
-    cfg: Config | None = st.session_state.get("cfg")
-    if res is None or cfg is None:
-        st.info("Run the analysis first.")
-        return
-    st.caption("The full HTML report, the same file `scanner run` writes. Pick symbols and/or strategies to filter "
-               "it; picked symbols show every picked strategy, including rules that did not match.")
-    with st.container(horizontal=True, vertical_alignment="bottom", gap="medium"):
-        symbols = st.multiselect("Symbols", sorted(res.analyses), placeholder="All symbols", width=360)
-        strategies = st.multiselect("Strategies", res.strategies_enabled, placeholder="All strategies", width=360,
-                                    format_func=lambda sid: _name(cfg, sid))
-        key = (tuple(symbols), tuple(strategies))
-        cache = st.session_state.setdefault("report_cache", {})
-        if key not in cache:
-            with st.spinner("Rendering report…"):
-                view = filtered_result(res, symbols, strategies) if symbols or strategies else res
-                cache[key] = render_html(view, cfg, deep=bool(symbols))
-        html = cache[key]
-        st.download_button("Export report", html.encode("utf-8"), mime="text/html", type="primary",
-                           file_name=f"scan_{res.as_of.isoformat()}"
-                                     f"{suffix_for(symbols or None, strategies or None)}.html",
-                           icon=":material/download:", on_click="ignore")
-    st.iframe(html, height=REPORT_HEIGHT)
+            _setup(res, cfg, next((r for r in rankings if r.symbol == selected), None), selected)
+    st.caption(DISCLAIMER)
 
 
 # ----------------------------------------------------------------------------------------------
@@ -543,9 +511,7 @@ def _restore_defaults(modified: dict[str, str]) -> None:
                     f"differ from it: {changed}.")
         if st.button("Restore all strategies", type="primary"):
             issues = restore_default_strategies(CONFIG_DIR)
-            if any(i.severity == "error" for i in issues):
-                st.error("Not restored:\n\n" + "\n".join(f"- {i}" for i in issues if i.severity == "error"))
-            else:
+            if not show_errors("Not restored:", issues):
                 _after_strategy_save("Strategies restored to defaults. Previous results were cleared.", issues)
 
 
@@ -570,9 +536,7 @@ def _strategy_editor(stg: Strategy) -> None:
             new = {"trend": trend, "signals_all": signals_all, "signals_any": signals_any,
                    "not_extended": not_extended, "alignment": alignment}
             issues = save_strategy(CONFIG_DIR, stg.id, new, enabled)
-            if any(i.severity == "error" for i in issues):
-                st.error("Not saved:\n\n" + "\n".join(f"- {i}" for i in issues if i.severity == "error"))
-            else:
+            if not show_errors("Not saved:", issues):
                 _after_strategy_save(f"Saved {stg.name}. Previous results were cleared; run the analysis again.",
                                      issues)
 
@@ -664,9 +628,7 @@ def _config_editor(cfg: Config) -> None:
     benchmark = st.text_input("Benchmark", value=cfg.settings.data.benchmark, width=200)
     if st.button("Save config", type="primary"):
         issues = save_edits(CONFIG_DIR, edited.to_dict("records"), benchmark)
-        errors = [i for i in issues if i.severity == "error"]
-        if errors:
-            st.error("Not saved:\n\n" + "\n".join(f"- {i}" for i in errors))
+        if show_errors("Not saved:", issues):
             return
         _clear_results()
         st.session_state.pop("universe_editor", None)
@@ -702,14 +664,10 @@ def render() -> None:
     if cfg is None:
         return
     _header(cfg)
-    results, report, criteria, config = st.tabs([TAB_RESULTS, TAB_REPORT, TAB_CRITERIA, TAB_CONFIG],
-                                                key="main_tab", on_change="rerun")
+    results, criteria, config = st.tabs([TAB_RESULTS, TAB_CRITERIA, TAB_CONFIG], key="main_tab", on_change="rerun")
     with results:
         if results.open:
             _results()
-    with report:
-        if report.open:
-            _report()
     with criteria:
         if criteria.open:
             _criteria(cfg)

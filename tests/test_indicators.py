@@ -129,3 +129,38 @@ def test_pivots_no_look_ahead_perturbation():
         new_h, new_l = find_pivots(h2, l2, d, 5)
         assert [p for p in base_h if p.confirm_idx <= t] == [p for p in new_h if p.confirm_idx <= t]
         assert [p for p in base_l if p.confirm_idx <= t] == [p for p in new_l if p.confirm_idx <= t]
+
+
+def _pivots_reference(high, low, dates, w, last_usable=None):
+    """The original loop implementation, kept as the oracle for the vectorised one."""
+    n = len(high)
+    last = n - 1 if last_usable is None else min(last_usable, n - 1)
+    highs, lows = [], []
+    for i in range(w, last - w + 1):
+        lh, rh = high[i - w:i], high[i + 1:i + w + 1]
+        if not (np.isnan(high[i]) or np.isnan(lh).any() or np.isnan(rh).any()):
+            if high[i] > lh.max() and high[i] >= rh.max():
+                highs.append((i, float(high[i]), i + w))
+        ll, rl = low[i - w:i], low[i + 1:i + w + 1]
+        if not (np.isnan(low[i]) or np.isnan(ll).any() or np.isnan(rl).any()):
+            if low[i] < ll.min() and low[i] <= rl.min():
+                lows.append((i, float(low[i]), i + w))
+    return highs, lows
+
+
+def test_find_pivots_matches_reference_loop():
+    rng = np.random.default_rng(3)
+    for trial in range(60):
+        n = int(rng.integers(1, 120))
+        high = np.round(rng.normal(100, 2, n), 0)  # rounded: many flat tops and bottoms
+        low = high - np.round(rng.uniform(0, 3, n), 0)
+        if trial % 3 == 0 and n > 4:
+            high[rng.integers(0, n, 3)] = np.nan
+            low[rng.integers(0, n, 3)] = np.nan
+        dates = [date(2026, 1, 1)] * n
+        w = int(rng.integers(1, 7))
+        last = None if trial % 2 else int(rng.integers(0, n))
+        h, lo = find_pivots(high, low, dates, w, last_usable=last)
+        exp_h, exp_l = _pivots_reference(high, low, dates, w, last)
+        assert [(p.idx, p.price, p.confirm_idx) for p in h] == exp_h
+        assert [(p.idx, p.price, p.confirm_idx) for p in lo] == exp_l

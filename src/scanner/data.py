@@ -9,13 +9,16 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 import pandas as pd
 
 from scanner import sessions
 from scanner.models import Diagnostic
+
+if TYPE_CHECKING:
+    from scanner.config import Settings
 
 log = logging.getLogger(__name__)
 
@@ -140,9 +143,19 @@ class ParquetCache:
             return json.loads(self.meta_path.read_text(encoding="utf-8"))
         return {}
 
-    def requested_start(self, symbol: str) -> date | None:
-        v = self.meta().get(symbol, {}).get("requested_start")
+    def requested_start(self, symbol: str, meta: dict | None = None) -> date | None:
+        """The earliest start ever requested for `symbol` (`meta`: an already-read `meta()`, to skip the file)."""
+        v = (self.meta() if meta is None else meta).get(symbol, {}).get("requested_start")
         return date.fromisoformat(v) if v else None
+
+
+def cache_for(s: Settings) -> ParquetCache:
+    return ParquetCache(Path(s.data.cache_dir), s.data.price_adjustment)
+
+
+def provider_for(s: Settings, max_retries: int | None = None) -> YFinanceProvider:
+    return YFinanceProvider(s.data.price_adjustment, s.data.batch_size,
+                            s.data.max_retries if max_retries is None else max_retries)
 
 
 @dataclass
@@ -159,6 +172,13 @@ class DataResult:
     data: dict[str, SymbolData]
     diagnostics: list[Diagnostic] = field(default_factory=list)
     network_calls: int = 0
+
+    def completed_frames(self, non_empty: bool = False) -> dict[str, pd.DataFrame]:
+        return {k: v.completed for k, v in self.data.items()
+                if v.completed is not None and not (non_empty and v.completed.empty)}
+
+    def provisional_frames(self) -> dict[str, pd.DataFrame]:
+        return {k: v.provisional for k, v in self.data.items() if v.provisional is not None}
 
 
 def _overlap_mismatch(old: pd.DataFrame, new: pd.DataFrame, rel_tol: float) -> bool:
@@ -200,13 +220,14 @@ def ensure_data(
 
     full: list[str] = []
     incremental: dict[str, pd.DataFrame] = {}
+    meta = cache.meta()  # read once, not per symbol
     for s in symbols:
         cached = None if refresh else cache.load(s)
         if cached is None or cached.empty:
             full.append(s)
             continue
         first, last = cached.index[0].date(), cached.index[-1].date()
-        req = cache.requested_start(s)
+        req = cache.requested_start(s, meta)
         covers_start = first <= need_start + timedelta(days=7) or (req is not None and req <= need_start)
         if not covers_start:
             full.append(s)

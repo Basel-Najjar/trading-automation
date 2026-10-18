@@ -93,7 +93,7 @@ def settings() -> Settings:
 
 @pytest.fixture
 def config_dir(tmp_path: Path) -> Path:
-    """Copy of the sample config with a tiny universe and the cache/report dirs inside tmp_path."""
+    """Copy of the sample config with a tiny universe and the cache dir inside tmp_path."""
     d = tmp_path / "config"
     d.mkdir()
     # tests pin the preserved default playbook, not the owner's working copy (which the app edits)
@@ -101,7 +101,6 @@ def config_dir(tmp_path: Path) -> Path:
     shutil.copyfile(ROOT / "config" / "strategies.default.yaml", d / "strategies.default.yaml")
     text = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
     text = text.replace("cache_dir: cache ", f"cache_dir: {(tmp_path / 'cache').as_posix()} ")
-    text = text.replace("reports_dir: reports ", f"reports_dir: {(tmp_path / 'reports').as_posix()} ")
     (d / "settings.yaml").write_text(text, encoding="utf-8")
     (d / "universe.csv").write_text("symbol,type,sector_etf,enabled,notes\nAAA,stock,XLK,true,\nBBB,stock,XLK,true,\n"
                                     "CCC,stock,,true,\n", encoding="utf-8")

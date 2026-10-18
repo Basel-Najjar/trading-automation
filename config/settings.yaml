@@ -1,6 +1,6 @@
 # settings.yaml — global technical parameters. Every key is optional; omitted keys use the defaults shown.
 # Keys marked [added] are not in requirements §6.9; they make implicit spec values configurable.
-# Run `scanner validate` after editing.
+# The app validates on load and before every save; an invalid file shows its errors on the page.
 
 data:
   history_years: 3
@@ -99,12 +99,7 @@ scoring:
   flow_scores: { with_flow: 1.0, mixed: 0.5, countertrend: 0.0, ignored: 0.5 } # [added]
   age_scores: [1.0, 0.5] # [added] by signal age
 
-report:
+display:
   max_watch_items: 30
   max_watch_items_per_symbol: 3 # [added] spec WL-3 default
-  chart_bars: 150
-  timezone: America/Chicago # [added] run timestamps (NF-9)
-  reports_dir: reports # [added]
-
-replay:
-  forward_horizons: [3, 5, 10, 20] # [added] RP-4
+  chart_bars: 150 # bars the price chart covers (the app opens on at most 60)

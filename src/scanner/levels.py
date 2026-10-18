@@ -19,10 +19,6 @@ def recency(bars_since: int, half_life: float) -> float:
     return float(0.5 ** (max(bars_since, 0) / half_life)) if half_life > 0 else 1.0
 
 
-def zone_at(level: Level, t: int, bars: Bars, k: float) -> tuple[float, float]:
-    return level.zone(t, bars.atr, k)
-
-
 def sma_levels(bars: Bars, cutoff: int, settings) -> list[Level]:
     out = []
     base = settings.levels.sma_base_quality
@@ -248,3 +244,10 @@ def project_next(level: Level, t: int) -> float:
         return level.value(t + 1)
     prev = level.value(t - 1)
     return v + (v - prev) if not np.isnan(prev) else v
+
+
+def next_zone(level: Level, t: int, atr: np.ndarray, k: float) -> tuple[float, float, float]:
+    """(level, zone low, zone high) one bar ahead of bar t, using bar t's ATR."""
+    nxt = project_next(level, t)
+    a = float(atr[t])
+    return nxt, nxt - k * a, nxt + k * a

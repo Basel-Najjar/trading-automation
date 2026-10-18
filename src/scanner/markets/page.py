@@ -15,11 +15,11 @@ import streamlit as st
 
 from scanner.config import Issue, Settings, load_settings
 from scanner.markets.config import LABELS, MARKETS, RESOLUTIONS, MarketsConfig, load_markets, save_markets
-from scanner.markets.export import export_name, render_markets_html
 from scanner.markets.figures import avg_corr_figure, corr_heatmap, explained_figure, loadings_figure, rrg_figure
 from scanner.markets.run import MarketsResult, config_digest, run_markets
 from scanner.markets.series import Prices, load_cached, prices_from, refresh_prices
 from scanner.markets.structure import RETURN_BARS, detail_figure, level_rows, signal_rows
+from scanner.ui import picked_rows, show_errors, table_height
 
 CONFIG_DIR = Path(os.environ.get("SCANNER_CONFIG_DIR", "config"))
 TAB_STRUCTURE, TAB_ROTATION, TAB_CORRELATION, TAB_LISTS = "Structure", "Rotation", "Correlation", "Lists"
@@ -28,20 +28,15 @@ TABLE_ROWS = 14
 CSS = "<style>.scn-muted { opacity: .6; font-weight: 400; font-size: .8em; }</style>"
 
 
-def _issues_md(issues: list[Issue]) -> str:
-    return "\n".join(f"- {i}" for i in issues)
-
-
 def _load() -> tuple[MarketsConfig | None, Settings | None]:
     issues: list[Issue] = []
     base = load_settings(CONFIG_DIR / "settings.yaml", issues)
     if base is None:
-        st.error("`settings.yaml` is invalid:\n\n" + _issues_md([i for i in issues if i.severity == "error"]))
+        show_errors("`settings.yaml` is invalid:", issues)
         return None, None
     mc, m_issues = load_markets(CONFIG_DIR, base)
     if mc is None:
-        st.error(f"`{MARKETS}` in `{CONFIG_DIR.resolve()}` is missing or invalid:\n\n"
-                 + _issues_md([i for i in m_issues if i.severity == "error"]))
+        show_errors(f"`{MARKETS}` in `{CONFIG_DIR.resolve()}` is missing or invalid:", m_issues)
         return None, base
     return mc, base
 
@@ -109,10 +104,6 @@ def _status(r: MarketsResult, prices: Prices) -> None:
             with st.popover(f"{len(notes)} data notes", type="tertiary", icon=":material/warning:"):
                 for d in r.diagnostics:
                     st.markdown(f"- {d.severity.upper()} **{d.symbol}**: {d.message}")
-        if r.analyses or r.rrg.tails:
-            st.download_button("Export HTML", data=lambda: render_markets_html(r), file_name=export_name(r),
-                               mime="text/html", icon=":material/download:", on_click="ignore", type="tertiary",
-                               help="An offline snapshot of all three views at this resolution")
 
 
 # ----------------------------------------------------------------------------------------------
@@ -125,7 +116,7 @@ def _structure(r: MarketsResult, token: int) -> None:
         st.info("No series could be analysed. Check the data notes, or press **Refresh prices**.")
         return
     labels = [row["Series"] for row in r.summary]
-    picked = ((st.session_state.get("mk_struct_table") or {}).get("selection") or {}).get("rows") or []
+    picked = picked_rows("mk_struct_table")
     if picked and picked[0] < len(labels):
         st.session_state["mk_pick"] = labels[picked[0]]
     sel = st.session_state.get("mk_pick")
@@ -135,7 +126,7 @@ def _structure(r: MarketsResult, token: int) -> None:
     df.insert(0, "", ["▶" if x == sel else "" for x in labels])
     pct = {name: st.column_config.NumberColumn(format="%+.1f%%") for name in RETURN_BARS[r.resolution]}
     st.dataframe(df, hide_index=True, on_select="rerun", selection_mode="single-row", key="mk_struct_table",
-                 height=min(len(df), TABLE_ROWS) * 35 + 38,
+                 height=table_height(len(df), TABLE_ROWS),
                  column_config={"": st.column_config.TextColumn(width=16),
                                 "Last": st.column_config.NumberColumn(format="%.4g"),
                                 "Chg %": st.column_config.NumberColumn(format="%+.2f%%"), **pct,
@@ -275,9 +266,7 @@ def _lists(mc: MarketsConfig, base: Settings) -> None:
         pca = _list_editor("Correlation members", mc.pca.members, f"mk_ed_pca_{rev}", "At least two series.")
     if st.button("Save lists", type="primary"):
         issues = save_markets(CONFIG_DIR, levels, bench, rrg, pca, base)
-        errors = [i for i in issues if i.severity == "error"]
-        if errors:
-            st.error("Not saved:\n\n" + _issues_md(errors))
+        if show_errors("Not saved:", issues):
             return
         _clear()
         st.session_state["mk_list_rev"] = rev + 1

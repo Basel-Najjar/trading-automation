@@ -27,6 +27,8 @@ SIGNAL_NAMES: tuple[str, ...] = (
 )
 TREND_STATES: tuple[str, ...] = ("uptrend", "downtrend", "range", "mixed")
 BIASES: tuple[str, ...] = ("bullish", "bearish", "non_bearish", "non_bullish", "neutral")
+UP_BIASES: tuple[str, ...] = ("bullish", "non_bearish")
+DOWN_BIASES: tuple[str, ...] = ("bearish", "non_bullish")
 NA = "n/a"
 
 
@@ -274,6 +276,7 @@ class Tech:
     levels: list[Level]
     trend: TrendResult
     notes: list[str] = field(default_factory=list)
+    memo: dict = field(default_factory=dict, repr=False, compare=False)  # per-structure results (signals._break)
 
 
 @dataclass
@@ -326,3 +329,16 @@ def jsonable(obj: Any) -> Any:
     if hasattr(obj, "isoformat"):
         return obj.isoformat()
     return obj
+
+
+
+def unique_by_id[T](items: list[T]) -> list[T]:
+    """`items` without repeats of the same object, first occurrence kept. Identity, not ==: dataclass equality
+    would compare numpy arrays."""
+    seen: set[int] = set()
+    out = []
+    for x in items:
+        if id(x) not in seen:
+            seen.add(id(x))
+            out.append(x)
+    return out

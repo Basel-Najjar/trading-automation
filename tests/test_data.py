@@ -34,8 +34,6 @@ def test_sessions_basics():
     assert sessions.latest_completed_session(AFTER_CLOSE) == date(2026, 9, 30)
     assert sessions.latest_completed_session(datetime(2026, 10, 4, 12, 0, tzinfo=ET)) == date(2026, 10, 2)  # Sunday
     assert sessions.session_on_or_before(date(2026, 7, 4)) == date(2026, 7, 2)  # holiday (observed 7/3) + weekend
-    assert sessions.is_provisional(date(2026, 9, 30), datetime(2026, 9, 30, 12, 0, tzinfo=ET))
-    assert not sessions.is_provisional(date(2026, 9, 30), AFTER_CLOSE)
     assert sessions.live_session(datetime(2026, 9, 30, 8, 0, tzinfo=ET)) is None
     # early close (day after Thanksgiving): 13:00 close
     assert sessions.session_close(date(2026, 11, 27)).hour == 13

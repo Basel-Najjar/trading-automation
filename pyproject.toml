@@ -1,12 +1,11 @@
 [project]
 name = "trading-automation"
 version = "0.1.0"
-description = "Technical Opportunity Scanner: daily-bar technical scanner mapping setups to options strategies"
+description = "Technical Opportunity Scanner: a Streamlit app mapping daily-bar technical setups to options strategies"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "exchange-calendars>=4.13.2",
-    "jinja2>=3.1.6",
     "numpy>=2.5.4",
     "pandas>=3.0.6",
     "plotly>=7.1.0",
@@ -14,12 +13,8 @@ dependencies = [
     "pydantic>=2",
     "pyyaml>=6.0.3",
     "streamlit>=1.66.0",
-    "typer>=0.27.3",
     "yfinance>=1.7.0",
 ]
-
-[project.scripts]
-scanner = "scanner.cli:main"
 
 [build-system]
 requires = ["hatchling"]

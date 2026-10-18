@@ -20,8 +20,15 @@ PAGES = [
     st.Page(scanner_page.render, title="Scanner", icon=":material/radar:", url_path="scanner", default=True),
     st.Page(markets_page.render, title="Markets", icon=":material/monitoring:", url_path="markets"),
 ]
-# The switcher is drawn in the page body, not Streamlit's header navigation: the scanner page pulls its content up
-# under the fixed header (padding-top override), which hid the header links on that page.
+# One top padding for every page, so switching pages never moves the layout. Streamlit's default (6rem) leaves a gap;
+# anything under the fixed header's height puts the first row (the page switcher) behind it, and the deployed
+# header is opaque, so the switcher disappears. Pages read the height from the variable (e.g. for sticky offsets).
+LAYOUT_CSS = """<style>
+:root { --app-header-height: 3.75rem; }
+[data-testid="stMainBlockContainer"] { padding-top: calc(var(--app-header-height) + 0.75rem); }
+</style>"""
+st.html(LAYOUT_CSS)
+# The switcher is drawn in the page body, not in Streamlit's header navigation, so it sits just below the header.
 current = st.navigation(PAGES, position="hidden")
 with st.container(horizontal=True, gap="small", key="page_switcher"):
     for page in PAGES:

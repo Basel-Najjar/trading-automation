@@ -1,7 +1,6 @@
-"""Interactive Plotly chart for the Streamlit app (the HTML report keeps the static SVG in charts.py).
-
-Same content as `charts.svg_chart`: candles, SMA50/200, level zones and lines, signal bars, pivots and an RSI pane,
-plus volume bars overlaid along the bottom of the price pane. Only the candles have a tooltip (OHLC).
+"""Interactive Plotly price chart for the Streamlit app: candles, SMA50/200, level zones and lines, signal bars,
+pivots and an RSI pane, plus volume bars overlaid along the bottom of the price pane. Only the candles have a
+tooltip (OHLC).
 The whole analysis window is plotted; the initial view shows the last `chart_bars` bars, so you can pan back.
 """
 
@@ -48,6 +47,19 @@ class Overlay:
     dash: str = "solid"
 
 
+def chart_levels(sa: SymbolAnalysis, extra: list[Level] | None = None) -> list[Level]:
+    """Levels worth drawing: signal levels, nearest per side, range boundaries (deduplicated)."""
+    out: dict[str, Level] = {}
+    for lv in extra or []:
+        out.setdefault(lv.id, lv)
+    for r in sa.nearest_support[:2] + sa.nearest_resistance[:2]:
+        out.setdefault(r["level"].id, r["level"])
+    for lv in (sa.trend.range_high, sa.trend.range_low):
+        if lv is not None:
+            out.setdefault(lv.id, lv)
+    return list(out.values())
+
+
 def _dt(d: date) -> datetime:
     return datetime(d.year, d.month, d.day)
 
@@ -70,7 +82,7 @@ def _finite(arr: np.ndarray, ts: range | list[int]) -> list[int]:
 
 
 def _visible_range(sa: SymbolAnalysis, levels: list[Level], start: int, last: int, k: float) -> tuple[float, float]:
-    """Initial y-range for the last `chart_bars` bars, padded like the SVG chart (levels near price widen it)."""
+    """Initial y-range for the last `chart_bars` bars, padded (levels near price widen it)."""
     b = sa.bars
     lo = float(np.nanmin(b.low[start:last + 1]))
     hi = float(np.nanmax(b.high[start:last + 1]))

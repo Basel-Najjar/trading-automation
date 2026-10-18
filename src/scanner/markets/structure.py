@@ -9,14 +9,13 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
-from scanner.app_view import change_pct, humanize, trend_text
-from scanner.charts import chart_levels
 from scanner.config import Settings
+from scanner.labels import change_pct, humanize, trend_text
 from scanner.markets.series import SeriesFrame
 from scanner.models import Diagnostic, NearResult, SignalResult, SymbolAnalysis, Tri
 from scanner.pipeline import analyze_symbol
-from scanner.plotly_chart import HALF_DAY, price_figure
-from scanner.report import level_dict
+from scanner.plotly_chart import HALF_DAY, chart_levels, price_figure
+from scanner.views import level_dict
 
 if TYPE_CHECKING:
     import plotly.graph_objects as go
@@ -71,7 +70,7 @@ def _near_text(n: NearResult, t: int) -> str:
 
 
 def summary_rows(analyses: dict[str, SymbolAnalysis], res: str) -> list[dict]:
-    """One row per series for the Structure table (also the HTML export)."""
+    """One row per series for the Structure table."""
     rows = []
     for label, sa in analyses.items():
         t = sa.last_idx

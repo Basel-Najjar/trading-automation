@@ -1,6 +1,6 @@
 # manual_levels.yaml (OPTIONAL) — rename to manual_levels.yaml to use.
 # Owner-drawn levels per symbol. They are tagged "manual" and always participate.
-# Diagonal anchors dated after a replay --as-of date are ignored (no look-ahead).
+# Diagonal anchors dated after the session being scanned are ignored (no look-ahead).
 AAPL:
   - type: horizontal
     role: support

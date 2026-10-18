@@ -18,7 +18,6 @@ from scanner.app_view import (
     direction,
     direction_groups,
     direction_setups,
-    filtered_result,
     humanize,
     overlay_choices,
     overview,
@@ -36,7 +35,6 @@ from scanner.data import Profile
 from scanner.models import RuleResult, Tri
 from scanner.pipeline import scan
 from scanner.plotly_chart import FADED
-from scanner.report import render_html
 
 D = date(2026, 9, 30)
 
@@ -195,24 +193,6 @@ def test_strategy_recipe(cfg):
         assert ("Any of" in terms) == bool(stg.technical.signals_any)
 
 
-def test_filtered_result_keeps_only_picks(res, cfg):
-    sym = sorted(res.analyses)[0]
-    sid = res.strategies_enabled[0]
-    f = filtered_result(res, [sym], [sid])
-    assert all(c.symbol == sym and c.strategy_id == sid for c in f.candidates)
-    assert all(ev.strategy.id == sid for evs in f.evals.values() for ev in evs)
-    assert all(w.symbol == sym and [s for s, _ in w.strategies] == [sid] for w in f.watchlist)
-    assert f.focus_symbols == [sym] and res.focus_symbols is None
-    assert len(res.evals[sym]) == len(res.strategies_enabled)  # original untouched
-    html = render_html(f, cfg, deep=True)
-    assert sym in html
-
-
-def test_filtered_result_empty_picks_is_everything(res):
-    f = filtered_result(res, [], [])
-    assert f.candidates == res.candidates and f.evals == res.evals
-
-
 def test_symbol_chart_is_shared_by_all_strategies(res):
     for sym in res.analyses:
         fig = symbol_chart(res, sym)
@@ -279,3 +259,34 @@ def test_overlay_choices_and_alignment(res):
 
 def test_some_symbol_offers_all_three_overlays(res):
     assert any(set(overlay_choices(res, s)) == {"etf", "benchmark", "ratio"} for s in res.analyses)
+
+
+def _scanner_script():
+    from scanner import scanner_page
+
+    scanner_page.render()
+
+
+def test_switching_direction_opens_the_groups_top_ticker(matched, cfg, config_dir):
+    from streamlit.testing.v1 import AppTest
+
+    from scanner import scanner_page
+
+    for c in matched.candidates:  # the fields the setup pane reads
+        c.status, c.alerts, c.components, c.signals = Tri.TRUE, [], [], []
+    syms = sorted(matched.analyses)
+    old = scanner_page.CONFIG_DIR
+    scanner_page.CONFIG_DIR = config_dir
+    try:
+        at = AppTest.from_function(_scanner_script, default_timeout=120)
+        at.session_state["res"], at.session_state["cfg"], at.session_state["profiles"] = matched, cfg, {}
+        at.run()
+        assert not at.exception, at.exception
+        assert at.session_state["f_direction"] == "Bullish" and at.session_state["selected_symbol"] == syms[1]
+        for group, expected in (("Neutral", syms[0]), ("Bearish", None), ("Bullish", syms[1])):
+            at.segmented_control(key="f_direction").set_value(group).run()
+            assert not at.exception, (group, at.exception)
+            assert at.session_state["selected_symbol"] == expected if expected else \
+                "selected_symbol" not in at.session_state, group
+    finally:
+        scanner_page.CONFIG_DIR = old

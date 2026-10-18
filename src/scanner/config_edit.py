@@ -20,7 +20,7 @@ from typing import Any, get_args
 
 import yaml
 
-from scanner.config import Config, Issue, Strategy, Technical, load_config, load_strategies
+from scanner.config import Config, Issue, Strategy, Technical, has_errors, load_config, load_strategies
 from scanner.models import TREND_STATES
 
 COLUMNS = ["symbol", "type", "sector_etf", "enabled", "notes"]
@@ -34,19 +34,20 @@ ALIGNMENT_CHOICES = list(get_args(Technical.model_fields["alignment"].annotation
 _BENCH_RE = re.compile(r"^(?P<pre>[ \t]+benchmark:[ \t]*)(?P<val>[^\s#]+)", re.MULTILINE)
 
 
-def _errors(issues: list[Issue]) -> bool:
-    return any(i.severity == "error" for i in issues)
+def _trial(root: Path, write) -> list[Issue]:
+    """The issues `load_config` reports after applying `write(dir)` to a temp copy of `root` (root untouched)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp) / "config"
+        shutil.copytree(root, d)
+        write(d)
+        return load_config(d)[1]
 
 
 def _validated_write(root: Path, write) -> list[Issue]:
     """Apply `write(dir)` to a temp copy and load it; if error-free, apply it to `root` too. Returns the issues."""
     root = Path(root)
-    with tempfile.TemporaryDirectory() as tmp:
-        d = Path(tmp) / "config"
-        shutil.copytree(root, d)
-        write(d)
-        _, issues = load_config(d)
-    if not _errors(issues):
+    issues = _trial(root, write)
+    if not has_errors(issues):
         write(root)
     return issues
 
@@ -121,11 +122,7 @@ def validate_edits(root: Path, rows: list[dict], benchmark: str) -> list[Issue]:
     benchmark = benchmark.strip().upper()
     if issues := _universe_precheck(rows, benchmark):
         return issues
-    with tempfile.TemporaryDirectory() as tmp:
-        d = Path(tmp) / "config"
-        shutil.copytree(root, d)
-        _write_universe(d, normalize_rows(rows), benchmark)
-        return load_config(d)[1]
+    return _trial(root, lambda d: _write_universe(d, normalize_rows(rows), benchmark))
 
 
 def save_edits(root: Path, rows: list[dict], benchmark: str) -> list[Issue]:
@@ -257,7 +254,7 @@ def default_strategies(root: Path) -> dict[str, Strategy] | None:
         return None
     issues: list[Issue] = []
     strats = load_strategies(p, issues)
-    return None if strats is None or _errors(issues) else {s.id: s for s in strats}
+    return None if strats is None or has_errors(issues) else {s.id: s for s in strats}
 
 
 def modified_strategies(cfg: Config) -> dict[str, str]:
