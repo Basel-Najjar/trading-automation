@@ -1,5 +1,6 @@
-"""View model for the Streamlit app: market overview, opportunity list grouped by symbol, run-relative score tiers,
-the setup pane (rule one-liners, price ladder, chart), post-scan filtering and ticker descriptions.
+"""View model for the Streamlit app: market overview, tickers split into Bullish / Bearish / Neutral candidates by
+their matched setups, the setup pane (rule one-liners, price ladder, chart), post-scan filtering and ticker
+descriptions.
 
 Pure functions over a `RunResult` (no Streamlit), so they are unit-tested like the rest of the scanner.
 """
@@ -144,62 +145,87 @@ def symbol_rankings(res: RunResult) -> list[SymbolRow]:
     return sorted(out, key=lambda r: (-r.best.fraction, -best_score[r.symbol], r.symbol))
 
 
-def _strategy_ok(r: StrategyRow, sids: set[str] | None, biases: set[str] | None) -> bool:
-    return (sids is None or r.ev.strategy.id in sids) and (biases is None or r.ev.strategy.bias in biases)
+def _strategy_ok(r: StrategyRow, sids: set[str] | None) -> bool:
+    return sids is None or r.ev.strategy.id in sids
 
 
-def _bias_set(groups: list[str] | None) -> set[str] | None:
-    return {b for g in groups for b in BIAS_GROUPS.get(g, (g,))} if groups else None
+# ----------------------------------------------------------------------------------------------
+# Direction: Bullish / Bearish / Neutral candidates
+# ----------------------------------------------------------------------------------------------
 
 
-def opportunity_rows(res: RunResult, symbols: list[str] | None = None, strategy_ids: list[str] | None = None,
-                     bias_groups: list[str] | None = None, sectors: list[str] | None = None,
-                     matches_only: bool = True) -> list[SymbolRow]:
-    """One row per symbol, its strategies limited to the filters (empty or None = all). `bias_groups` are keys of
-    BIAS_GROUPS. With `matches_only`, symbols without a candidate among the kept strategies are dropped.
-    Order: symbols with a candidate first (best score desc), then by share of rules met, then symbol."""
+def bias_group(bias: str) -> str:
+    """The direction group ("Bullish", "Bearish" or "Neutral") of one strategy bias."""
+    return next((g for g, biases in BIAS_GROUPS.items() if bias in biases), "Neutral")
+
+
+def setup_summary(row: SymbolRow) -> dict[str, list[StrategyRow]]:
+    """The symbol's matched strategies by direction group (every group present, in BIAS_GROUPS order), best score
+    first."""
+    out: dict[str, list[StrategyRow]] = {g: [] for g in BIAS_GROUPS}
+    for r in sorted(row.matches, key=lambda r: (-r.score, r.ev.strategy.name)):
+        out[bias_group(r.ev.strategy.bias)].append(r)
+    return out
+
+
+def direction(row: SymbolRow) -> str | None:
+    """A ticker's direction from its matched setups: None without a match; Neutral when it has both bullish and
+    bearish matches (two-sided, e.g. bull put + bear call in a range) or only neutral ones; otherwise the one side
+    it matched (a neutral match beside it does not change that)."""
+    groups = {g for g, rows in setup_summary(row).items() if rows}
+    if not groups:
+        return None
+    bull, bear = "Bullish" in groups, "Bearish" in groups
+    if bull == bear:
+        return "Neutral"
+    return "Bullish" if bull else "Bearish"
+
+
+def direction_setups(row: SymbolRow, group: str | None = None) -> list[StrategyRow]:
+    """The matches that back the ticker's direction (or `group`'s), best score first: those on its side, or every
+    match for a Neutral ticker."""
+    group = group or direction(row)
+    if group is None:
+        return []
+    out = [r for g, rows in setup_summary(row).items() if group == "Neutral" or g == group for r in rows]
+    return sorted(out, key=lambda r: (-r.score, r.ev.strategy.name))
+
+
+def direction_groups(res: RunResult, symbols: list[str] | None = None, strategy_ids: list[str] | None = None,
+                     sectors: list[str] | None = None) -> dict[str, list[SymbolRow]]:
+    """Tickers with at least one matched setup, split by `direction` ("Bullish", "Bearish", "Neutral", every key
+    present). Each row keeps its strategies within the filters (empty or None = all), and its direction is taken
+    from those. Order: best score among the setups in the ticker's direction desc, then symbol."""
     syms, secs = set(symbols or []) or None, set(sectors or []) or None
-    sids, biases = set(strategy_ids or []) or None, _bias_set(bias_groups)
-    out = []
+    sids = set(strategy_ids or []) or None
+    out: dict[str, list[SymbolRow]] = {g: [] for g in BIAS_GROUPS}
     for s in symbol_rankings(res):
         if (syms is not None and s.symbol not in syms) or (secs is not None and s.sector not in secs):
             continue
-        rows = [r for r in s.rows if _strategy_ok(r, sids, biases)]
-        if not rows or (matches_only and not any(r.cand for r in rows)):
+        rows = [r for r in s.rows if _strategy_ok(r, sids)]
+        if not rows:
             continue
-        out.append(replace(s, rows=rows))
-    return sorted(out, key=lambda s: (s.best.cand is None, -s.best.score, -s.best.fraction, s.symbol))
+        kept = replace(s, rows=rows)
+        d = direction(kept)
+        if d is not None:
+            out[d].append(kept)
+    for g in out:
+        out[g].sort(key=lambda s, g=g: (-direction_setups(s, g)[0].score, s.symbol))
+    return out
 
 
-def setup_pairs(rows: list[SymbolRow], matches_only: bool = True) -> list[tuple[SymbolRow, StrategyRow]]:
-    """The "by setup" view of `opportunity_rows`: one entry per (symbol, strategy), candidates first by score,
-    then by share of rules met. With `matches_only`, only candidates."""
-    pairs = [(s, r) for s in rows for r in s.rows if r.cand or not matches_only]
-    return sorted(pairs, key=lambda p: (p[1].cand is None, -p[1].score, -p[1].fraction, p[0].symbol,
-                                        p[1].ev.strategy.name))
+def pane_rows(row: SymbolRow) -> list[StrategyRow]:
+    """Every evaluated strategy for the setup pane: matches in the ticker's direction first (best score first), then
+    its other matches, then the rest by share of rules met."""
+    d = direction(row)
 
+    def key(r: StrategyRow) -> tuple:
+        if r.cand is None:
+            return (2, 0.0, -r.fraction, r.ev.strategy.name)
+        own = d is not None and (d == "Neutral" or bias_group(r.ev.strategy.bias) == d)
+        return (0 if own else 1, -r.score, 0.0, r.ev.strategy.name)
 
-# ----------------------------------------------------------------------------------------------
-# Tiers
-# ----------------------------------------------------------------------------------------------
-
-TIER_SHARES = (0.2, 0.6)  # A = top 20% of this run's candidates, B = down to 60%, C = the rest
-
-
-def tier_cutoffs(scores: list[float], shares: tuple[float, float] = TIER_SHARES) -> tuple[float, float]:
-    """(lowest A score, lowest B score) for this run's candidate scores. Ties share a tier. No scores → (inf, inf)."""
-    s = sorted(scores, reverse=True)
-    if not s:
-        return math.inf, math.inf
-    pick = [s[max(math.ceil(share * len(s)), 1) - 1] for share in shares]
-    return pick[0], pick[1]
-
-
-def tier(score: float | None, cutoffs: tuple[float, float]) -> str | None:
-    """"A", "B" or "C" relative to the run (see `tier_cutoffs`); None when there is no candidate score."""
-    if score is None:
-        return None
-    return "A" if score >= cutoffs[0] else "B" if score >= cutoffs[1] else "C"
+    return sorted(row.rows, key=key)
 
 
 # ----------------------------------------------------------------------------------------------
@@ -208,15 +234,18 @@ def tier(score: float | None, cutoffs: tuple[float, float]) -> str | None:
 
 
 def overview(res: RunResult, cfg: Config) -> dict:
-    """Top-of-page summary: session, benchmark, counts, and one entry per sector ETF with its setup count."""
+    """Top-of-page summary: session, benchmark, counts (tickers per direction), and one entry per sector ETF with
+    its setup count."""
     market, sectors = market_context(res, cfg)
     with_cand = {c.symbol for c in res.candidates}
     for e in sectors:
         e["setups"] = sum(1 for m in e["members"] if m in with_cand)
     warnings = [d for d in res.diagnostics if d.severity != "info"]
+    directions = {g: len(rows) for g, rows in direction_groups(res).items()}
     return {"as_of": res.as_of, "provisional": res.provisional, "notes": list(res.notes), "market": market,
             "sectors": sectors, "n_candidates": len(res.candidates), "n_symbols_with": len(with_cand),
-            "n_symbols": len(res.analyses), "watch": res.watchlist, "skipped": res.skipped, "warnings": warnings}
+            "n_symbols": len(res.analyses), "directions": directions, "watch": res.watchlist,
+            "skipped": res.skipped, "warnings": warnings}
 
 
 # ----------------------------------------------------------------------------------------------

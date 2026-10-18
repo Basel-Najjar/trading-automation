@@ -59,11 +59,12 @@ def test_round_trip_is_byte_identical(csv_config):
 
 
 def test_add_symbol_and_change_benchmark(csv_config):
-    rows = universe_table(_cfg(csv_config)) + [{"symbol": " pltr ", "type": "stock", "enabled": True,
+    # a ticker that cannot already be in the owner's universe (the fixture copies the real config)
+    rows = universe_table(_cfg(csv_config)) + [{"symbol": " zzzt ", "type": "stock", "enabled": True,
                                                 "notes": None, "sector_etf": "xlk"}]
     save_edits(csv_config, rows, "qqq")
     cfg = _cfg(csv_config)
-    assert "PLTR" in cfg.symbols and cfg.sector_for("PLTR") == "XLK"
+    assert "ZZZT" in cfg.symbols and cfg.sector_for("ZZZT") == "XLK"
     assert cfg.settings.data.benchmark == "QQQ"
     text = (csv_config / "settings.yaml").read_text(encoding="utf-8")
     assert "  benchmark: QQQ\n" in text and "# settings.yaml — global technical parameters" in text

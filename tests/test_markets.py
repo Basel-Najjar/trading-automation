@@ -344,3 +344,13 @@ def test_page_renders_every_tab(mdir: Path, frames):
         assert not at.exception, at.exception
     finally:
         page.CONFIG_DIR = old
+
+
+def test_app_shell_draws_a_page_switcher_in_the_body():
+    """Regression: the header navigation was hidden under the scanner page's content, trapping the user there."""
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(str(ROOT / "src" / "scanner" / "app.py"), default_timeout=120)
+    at.run()
+    assert not at.exception, at.exception
+    assert [link.proto.label for link in at.get("page_link")] == ["Scanner", "Markets"]

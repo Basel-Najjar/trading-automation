@@ -1,31 +1,36 @@
-"""View model for the Streamlit app: % of rules met, ranking and grouping, tiers, overview, setup pane, filtering."""
+"""View model for the Streamlit app: % of rules met, ranking, Bullish/Bearish/Neutral grouping, overview, setup pane,
+filtering."""
 
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
 from scanner.app_view import (
-    BIAS_GROUPS,
+    StrategyRow,
+    SymbolRow,
+    bias_group,
     card_tooltip,
     chart_overlays,
     detail_view,
+    direction,
+    direction_groups,
+    direction_setups,
     filtered_result,
     humanize,
-    opportunity_rows,
     overlay_choices,
     overview,
+    pane_rows,
     price_ladder,
-    setup_pairs,
+    setup_summary,
     split_summary,
     strategy_recipe,
     strategy_rows,
     symbol_chart,
     symbol_rankings,
     ticker_description,
-    tier,
-    tier_cutoffs,
 )
 from scanner.data import Profile
 from scanner.models import RuleResult, Tri
@@ -70,53 +75,90 @@ def test_rankings_sorted_and_best_is_max(res):
             assert next(r for r in ranked if r.symbol == c.symbol).best.fraction == 1.0
 
 
-def test_opportunity_rows_one_per_symbol(res):
-    rows = opportunity_rows(res, matches_only=False)
-    assert len(rows) == len({r.symbol for r in rows}) == len(symbol_rankings(res))
-    matched = opportunity_rows(res)
-    assert {r.symbol for r in matched} == {c.symbol for c in res.candidates}
-    assert all(r.best.cand is not None for r in matched)
-    keys = [(r.best.cand is None, -r.best.score) for r in rows]
-    assert keys == sorted(keys)
-    for r in rows:
-        assert [x.fraction for x in r.rows] == sorted((x.fraction for x in r.rows), reverse=True)
+def _row(*specs: tuple[str, float | None]) -> SymbolRow:
+    """A hand-built symbol row: one strategy per (bias, score); a None score is a strategy that did not match."""
+    rows = []
+    for n, (bias, score) in enumerate(specs):
+        ev = SimpleNamespace(strategy=SimpleNamespace(id=f"s{n}", name=f"S{n} {bias}", bias=bias))
+        cand = SimpleNamespace(score=score) if score is not None else None
+        rows.append(StrategyRow(ev, 1, 2, 0, cand))
+    return SymbolRow("X", rows, 100.0, 0.0, "range")
 
 
-def test_opportunity_rows_filters(res):
-    rows = opportunity_rows(res, matches_only=False)
-    sym, sid = rows[0].symbol, rows[0].best.ev.strategy.id
-    assert opportunity_rows(res, [], [], [], [], False) == rows
-    assert [r.symbol for r in opportunity_rows(res, [sym], matches_only=False)] == [sym]
-    assert all(x.ev.strategy.id == sid for r in opportunity_rows(res, strategy_ids=[sid], matches_only=False)
-               for x in r.rows)
-    for group, biases in BIAS_GROUPS.items():
-        assert all(x.ev.strategy.bias in biases for r in opportunity_rows(res, bias_groups=[group], matches_only=False)
-                   for x in r.rows)
-    sectors = {r.sector for r in rows if r.sector}
+@pytest.mark.parametrize(("specs", "want"), [
+    ([("bullish", 60.0), ("non_bearish", 50.0)], "Bullish"),
+    ([("bearish", 60.0), ("non_bullish", None)], "Bearish"),
+    ([("neutral", 40.0)], "Neutral"),
+    ([("non_bearish", 70.0), ("neutral", 80.0)], "Bullish"),  # a neutral match beside one side keeps that side
+    ([("non_bearish", 70.0), ("non_bullish", 65.0)], "Neutral"),  # both sides: two-sided, e.g. a range
+    ([("bullish", None), ("bearish", None)], None),  # no match: not put in a group
+])
+def test_direction_from_matched_setups(specs, want):
+    assert direction(_row(*specs)) == want
+
+
+def test_bias_group():
+    assert {b: bias_group(b) for b in ("bullish", "non_bearish", "bearish", "non_bullish", "neutral")} == {
+        "bullish": "Bullish", "non_bearish": "Bullish", "bearish": "Bearish", "non_bullish": "Bearish",
+        "neutral": "Neutral"}
+
+
+def test_setup_summary_and_pane_order():
+    row = _row(("non_bearish", 50.0), ("bullish", 70.0), ("neutral", 80.0), ("bearish", None))
+    summary = setup_summary(row)
+    assert list(summary) == ["Bullish", "Bearish", "Neutral"]
+    assert [r.score for r in summary["Bullish"]] == [70.0, 50.0] and summary["Bearish"] == []
+    assert [r.score for r in summary["Neutral"]] == [80.0]
+    # the ticker's own direction first, then its other matches, then the strategies that did not match
+    assert [r.ev.strategy.id for r in pane_rows(row)] == ["s1", "s0", "s2", "s3"]
+
+
+@pytest.fixture
+def matched(res):
+    """`res` with stand-in candidates (the fixture market matches nothing): the first symbol matches a bullish and a
+    bearish strategy, the second only bullish ones."""
+    syms = sorted(res.analyses)
+    by_bias = {}
+    for ev in res.evals[syms[0]]:
+        by_bias.setdefault(bias_group(ev.strategy.bias), ev.strategy.id)
+    bull, bear = by_bias["Bullish"], by_bias["Bearish"]
+    res.candidates = [SimpleNamespace(symbol=syms[0], strategy_id=bull, score=60.0),
+                      SimpleNamespace(symbol=syms[0], strategy_id=bear, score=55.0),
+                      SimpleNamespace(symbol=syms[1], strategy_id=bull, score=70.0)]
+    return res
+
+
+def test_direction_groups_partition_matched_tickers(matched):
+    res = matched
+    groups = direction_groups(res)
+    syms = sorted(res.analyses)
+    assert [r.symbol for r in groups["Neutral"]] == [syms[0]]  # bullish + bearish matches: two-sided
+    assert [r.symbol for r in groups["Bullish"]] == [syms[1]] and groups["Bearish"] == []
+    assert list(groups) == ["Bullish", "Bearish", "Neutral"]
+    listed = [r.symbol for rows in groups.values() for r in rows]
+    assert len(listed) == len(set(listed))  # each ticker in at most one group
+    assert set(listed) == {c.symbol for c in res.candidates}  # only tickers with a match
+    for g, rows in groups.items():
+        assert all(direction(r) == g for r in rows)
+        best = [direction_setups(r, g)[0].score for r in rows]
+        assert best == sorted(best, reverse=True)
+
+
+def test_direction_groups_filters(matched):
+    res = matched
+    groups = direction_groups(res)
+    assert direction_groups(res, [], [], []) == groups
+    first = next(r for rows in groups.values() for r in rows)
+    sym, sid = first.symbol, first.matches[0].ev.strategy.id
+    assert [r.symbol for rows in direction_groups(res, [sym]).values() for r in rows] == [sym]
+    narrowed = [r for rows in direction_groups(res, strategy_ids=[sid]).values() for r in rows]
+    assert narrowed and all(x.ev.strategy.id == sid for r in narrowed for x in r.rows)
+    bull_only = direction_groups(res, strategy_ids=[res.candidates[0].strategy_id])  # the direction follows the filter
+    assert {r.symbol for r in bull_only["Bullish"]} == {c.symbol for c in res.candidates}
+    sectors = {r.sector for rows in groups.values() for r in rows if r.sector}
     if sectors:
         etf = sorted(sectors)[0]
-        assert {r.sector for r in opportunity_rows(res, sectors=[etf], matches_only=False)} == {etf}
-
-
-def test_setup_pairs(res):
-    rows = opportunity_rows(res, matches_only=False)
-    everything = setup_pairs(rows, matches_only=False)
-    assert len(everything) == sum(len(r.rows) for r in rows)
-    assert len({(s.symbol, r.ev.strategy.id) for s, r in everything}) == len(everything)
-    only = setup_pairs(rows)
-    assert len(only) == len(res.candidates) and all(r.cand for _, r in only)
-    assert [r.score for _, r in only] == sorted((r.score for _, r in only), reverse=True)
-
-
-def test_tier_cutoffs_are_relative_to_the_run():
-    scores = [float(x) for x in range(10, 0, -1)]  # 10 … 1
-    cut = tier_cutoffs(scores)
-    assert cut == (9.0, 5.0)  # top 20% = 2 scores, top 60% = 6 scores
-    assert [tier(x, cut) for x in scores] == ["A"] * 2 + ["B"] * 4 + ["C"] * 4
-    assert tier(None, cut) is None
-    assert tier_cutoffs([70.0, 70.0, 70.0]) == (70.0, 70.0)  # ties share the tier
-    assert tier(5.0, tier_cutoffs([])) == "C"
-    assert tier(80.0, tier_cutoffs([80.0])) == "A"
+        assert {r.sector for rows in direction_groups(res, sectors=[etf]).values() for r in rows} == {etf}
 
 
 def test_humanize():
@@ -133,6 +175,8 @@ def test_overview_counts_and_sectors(res, cfg):
     with_cand = {c.symbol for c in res.candidates}
     for e in ov["sectors"]:
         assert e["setups"] == sum(1 for m in e["members"] if m in with_cand)
+    assert ov["directions"] == {g: len(rows) for g, rows in direction_groups(res).items()}
+    assert sum(ov["directions"].values()) == ov["n_symbols_with"]
 
 
 def test_price_ladder_sorted_with_close():

@@ -59,27 +59,32 @@ from high level to detail: overview, then the list, then one setup, then its evi
 - **Run.** At the top, pick a session date (default today), optionally tick **Force refresh**, then press **Run
   analysis**. Every run scans all enabled symbols and all active strategies. All filtering happens after the scan.
 - **Overview band.** It shows the session (with a *prior session* or *provisional bar* badge), the benchmark's trend and
-  1m/3m returns, and the number of setups. **Watch list** opens the near-setups; pick a row to open that symbol.
+  1m/3m returns, and how many tickers are bullish, bearish and neutral candidates. **Watch list** opens the near-setups; pick a row to open that symbol.
   **Skipped / warnings** lists what was left out. The **Sector** pills show each sector ETF's trend, 1-month return
   and number of symbols with a setup. Picking one filters the list.
-- **Filters.** These are **By symbol / By setup**, **Bias** (Bullish = bullish + not bearish, Bearish = bearish + not
-  bullish, Neutral), **Strategy**, **Symbol** and **Include near misses**. Without near misses, only full matches
-  are listed.
-- **Top five and the list.** The five best symbols appear as cards; **Open** shows one. Below them, the list has
-  one row per symbol (its best setup, plus "+N" other matching strategies) or one row per setup. Pick a row to open
-  it in the setup pane beside the list, which stays in view while you scroll.
-- **Score tiers.** A score (0–100) belongs to a symbol × strategy pair. Tier **A** is the top 20% of this run's
-  candidate scores, **B** the next 40%, **C** the rest. Tiers only compare setups within one run.
+- **Bullish / Bearish / Neutral candidates.** Every active strategy is still evaluated against every ticker. A
+  ticker's direction comes from its matched setups, grouped by strategy bias (Bullish = bullish + not bearish,
+  Bearish = bearish + not bullish, Neutral = neutral). It is **Bullish** or **Bearish** when its matches are on
+  that side (a neutral match beside them does not change it). It is **Neutral** when it matches only neutral
+  strategies or both bullish and bearish ones (two-sided, e.g. a bull put and a bear call spread in a range).
+  Tickers without a full match are not grouped; the watch list covers the near ones.
+- **The list.** A switcher picks the group (with its ticker count). The list has one row per ticker: its best setup
+  in that direction and its score, plus the other strategies in that direction that also match. Tickers are ordered
+  by that best score. Pick a row to open it in the setup pane beside the list, which stays in view while you scroll.
+  **Strategy**, **Symbol** and the sector pills filter the list; a ticker's direction is taken from the strategies
+  left after the strategy filter. A score (0–100) belongs to a symbol × strategy pair.
 - **Ticker descriptions.** The name is your `notes` from `universe.csv`, or else the yfinance name. The summary is
   the yfinance business summary. Both are display only and cached in `cache/profiles.json` for 30 days; **Force
   refresh** refetches them.
-- **Setup pane.** The header shows the symbol, name, close, change, RSI, ATR and sector. Below it is one Plotly
+- **Setup pane.** The header shows the symbol, name, its direction badge and its matched setups summarised by
+  direction (each with its score), then the close, change, RSI, ATR and sector. Below it is one Plotly
   chart per symbol, opening on the last 60 bars, with the signal levels and markers of all its strategies. You can
   zoom, pan back through the full history, and use **Legend** to list or hide levels. Buttons beside it overlay
   the symbol's sector ETF, the benchmark and the ETF/benchmark ratio (the series sector flow is read from), each
   on its own right-hand axis in its own colour; they toggle inside the chart, so they never reload it or reset the
   zoom. Strategy pills under the chart
-  switch between that symbol's strategies (matches first, with score and tier; others with rules met). Switching
+  switch between every strategy evaluated for that symbol (matches in its direction first, then its other
+  matches, each with its score; then the rest with rules met). Switching
   leaves the chart and its zoom as they are and updates only what follows: score, rules met, trend and flow, one
   plain line per rule, and the **price ladder**, which lists alert prices (including invalidation) and the last
   close, highest first. A near miss shows its trigger prices, or the

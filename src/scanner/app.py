@@ -16,7 +16,14 @@ from scanner.markets import page as markets_page
 
 st.set_page_config(page_title="Trading workflow", page_icon=":material/candlestick_chart:", layout="wide",
                    initial_sidebar_state="collapsed")
-st.navigation([
+PAGES = [
     st.Page(scanner_page.render, title="Scanner", icon=":material/radar:", url_path="scanner", default=True),
     st.Page(markets_page.render, title="Markets", icon=":material/monitoring:", url_path="markets"),
-], position="top").run()
+]
+# The switcher is drawn in the page body, not Streamlit's header navigation: the scanner page pulls its content up
+# under the fixed header (padding-top override), which hid the header links on that page.
+current = st.navigation(PAGES, position="hidden")
+with st.container(horizontal=True, gap="small", key="page_switcher"):
+    for page in PAGES:
+        st.page_link(page, width="content")
+current.run()

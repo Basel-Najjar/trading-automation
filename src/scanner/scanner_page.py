@@ -2,8 +2,10 @@
 detail:
 
 1. Overview band: session, benchmark, counts, watch list, skipped symbols and a sector strip that filters the list.
-2. Opportunities: the five best setups, then a list grouped by symbol (or one row per setup), with filters.
-3. Setup pane beside the list: strategy switcher, key numbers, chart, one line per rule and a price ladder.
+2. Candidates: tickers split into Bullish / Bearish / Neutral by their matched setups (a switcher picks the
+   group), with filters. Every active strategy is still evaluated against every ticker.
+3. Setup pane beside the list: direction, setups summarised by direction, chart, strategy switcher, key numbers,
+   one line per rule and a price ladder.
 4. Evidence tabs in the pane (why, levels, about), plus links to the strategy's criteria and an
    export of the HTML report for that setup.
 
@@ -23,23 +25,23 @@ import pandas as pd
 import streamlit as st
 
 from scanner.app_view import (
-    BIAS_GROUPS,
     STATUS_ICON,
     SymbolRow,
     card_tooltip,
     change_pct,
     detail_view,
+    direction,
+    direction_groups,
+    direction_setups,
     filtered_result,
     humanize,
-    opportunity_rows,
     overview,
-    setup_pairs,
+    pane_rows,
+    setup_summary,
     strategy_recipe,
-    strategy_rows,
     symbol_chart,
+    symbol_rankings,
     ticker_description,
-    tier,
-    tier_cutoffs,
     trend_text,
 )
 from scanner.config import Config, Strategy, load_config
@@ -65,15 +67,15 @@ from scanner.report import render_html, suffix_for
 
 CONFIG_DIR = Path(os.environ.get("SCANNER_CONFIG_DIR", "config"))
 REPORT_HEIGHT = 1600
-TOP_N = 5
 TABLE_ROWS = 18  # visible rows in the opportunity list before it scrolls
 TAB_RESULTS, TAB_REPORT, TAB_CRITERIA, TAB_CONFIG = "Results", "Report", "Criteria", "Config"
-TIER_BADGE = {"A": ":primary-badge[Tier A]", "B": ":blue-badge[Tier B]", "C": ":gray-badge[Tier C]"}
+DIRECTION_ICON = {"Bullish": "▲", "Bearish": "▼", "Neutral": "↔"}
+DIRECTION_BADGE = {"Bullish": ":green-badge[▲ Bullish]", "Bearish": ":red-badge[▼ Bearish]",
+                   "Neutral": ":gray-badge[↔ Neutral]"}
 STATUS_MD = {Tri.TRUE: ":green[**✓**]", Tri.FALSE: ":red[**✗**]", Tri.PENDING: ":orange[**⏳**]"}
 TREND_COLOR = {"uptrend": "green", "downtrend": "red"}
 CSS = """<style>
 [data-testid="stMainBlockContainer"] { padding-top: 2.5rem; }
-.scn-score { font-size: 1.9rem; font-weight: 650; line-height: 1.1; }
 .scn-muted { opacity: .6; font-weight: 400; }
 [data-testid="stMetricValue"] { font-size: 1.45rem; }
 /* the opportunity list stays in view while the setup pane beside it scrolls */
@@ -92,7 +94,7 @@ def _load() -> Config | None:
 
 def _clear_results() -> None:
     for key in list(st.session_state):
-        if key in ("res", "cfg", "selected_symbol", "report_cache", "profiles", "cutoffs", "charts") or \
+        if key in ("res", "cfg", "selected_symbol", "report_cache", "profiles", "charts") or \
                 str(key).startswith(("strat_", "opps_", "_pick_", "watch_table")):
             st.session_state.pop(key, None)
 
@@ -109,7 +111,6 @@ def _run(cfg: Config, as_of: date, refresh: bool) -> None:
     st.session_state["charts"] = {}  # figures belong to a run
     st.session_state["cfg"] = cfg
     st.session_state["report_cache"] = {}
-    st.session_state["cutoffs"] = tier_cutoffs([c.score for c in res.candidates])
     with st.spinner("Loading ticker descriptions…"):
         st.session_state["profiles"] = fetch_profiles(sorted(res.analyses), Path(cfg.settings.data.cache_dir),
                                                       refresh=refresh)
@@ -195,8 +196,12 @@ def _overview(ov: dict) -> None:
             r = m["returns"]
             market.markdown(f"**{m['symbol']}** {m['close']:,.2f} {_trend_md(m['trend'].state)} · "
                             f"1m {_pct_md(r.get('1m'))} · 3m {_pct_md(r.get('3m'))}", help=m["trend"].reason)
-        counts.markdown(f"**{ov['n_candidates']}** setups on **{ov['n_symbols_with']}** of {ov['n_symbols']} "
-                        "symbols")
+        dirs = ov["directions"]
+        counts.markdown(" · ".join(f"{DIRECTION_ICON[g]} **{n}** {g.lower()}" for g, n in dirs.items())
+                        + f" of {ov['n_symbols']} symbols",
+                        help=f"{ov['n_candidates']} matched setups across every active strategy. A ticker is "
+                             "bullish or bearish when its matches are on one side, neutral when they are neutral "
+                             "or on both sides.")
         with watch:
             _watch_popover(ov)
         if ov["skipped"] or ov["warnings"]:
@@ -241,74 +246,46 @@ def _watch_popover(ov: dict) -> None:
 def _filters(res: RunResult, cfg: Config) -> dict:
     evaluated = sorted({ev.strategy.id for evs in res.evals.values() for ev in evs}, key=lambda s: _name(cfg, s))
     with st.container(horizontal=True, vertical_alignment="bottom", gap="medium"):
-        view = st.segmented_control("List", ["By symbol", "By setup"], default="By symbol", key="f_view",
-                                    required=True)
-        biases = st.pills("Bias", list(BIAS_GROUPS), selection_mode="multi", key="f_bias")
         strategies = st.multiselect("Strategy", evaluated, key="f_strategy", placeholder="All strategies",
                                     format_func=lambda s: _name(cfg, s), width=300)
         symbols = st.multiselect("Symbol", sorted(res.analyses), key="f_symbol", placeholder="All symbols",
                                  width=220)
-        near = st.toggle("Include near misses", key="f_near",
-                         help="Also list symbols and strategies that meet only some of the rules.")
-    return {"view": view, "bias_groups": biases, "strategy_ids": strategies, "symbols": symbols,
-            "sectors": st.session_state.get("f_sector") or [], "matches_only": not near}
+    return {"strategy_ids": strategies, "symbols": symbols, "sectors": st.session_state.get("f_sector") or []}
 
 
-def _list_rows(rows: list[SymbolRow], f: dict, cutoffs) -> tuple[list[dict], list[tuple[str, str | None]]]:
-    """Table rows and, per row, the (symbol, strategy) a pick opens."""
+def _direction_pick(groups: dict[str, list[SymbolRow]]) -> str:
+    """The Bullish / Bearish / Neutral switcher above the list. Defaults to the first group with tickers."""
+    if st.session_state.get("f_direction") not in groups:
+        st.session_state["f_direction"] = next((g for g, rows in groups.items() if rows), next(iter(groups)))
+    return st.segmented_control(
+        "Direction", list(groups), key="f_direction", required=True, label_visibility="collapsed",
+        format_func=lambda g: f"{DIRECTION_ICON[g]} {g} · {len(groups[g])}") or st.session_state["f_direction"]
+
+
+def _list_rows(rows: list[SymbolRow], group: str) -> tuple[list[dict], list[tuple[str, str | None]]]:
+    """Table rows for one direction group and, per row, the (symbol, strategy) a pick opens."""
     data, picks = [], []
-    if f["view"] == "By symbol":
-        for s in rows:
-            b = s.best
-            more = len(s.matches) - (1 if b.cand else 0)
-            data.append({"Symbol": s.symbol, "Chg %": s.change_pct, "Setup": b.ev.strategy.name,
-                         "Tier": tier(b.cand.score if b.cand else None, cutoffs) or "",
-                         "Score": b.cand.score if b.cand else None, "Rules": f"{b.met}/{b.total}",
-                         "More": f"+{more}" if more > 0 else ""})
-            picks.append((s.symbol, None))
-    else:
-        for s, r in setup_pairs(rows, f["matches_only"]):
-            data.append({"Symbol": s.symbol, "Chg %": s.change_pct, "Setup": r.ev.strategy.name,
-                         "Tier": tier(r.cand.score if r.cand else None, cutoffs) or "",
-                         "Score": r.cand.score if r.cand else None, "Rules": f"{r.met}/{r.total}"})
-            picks.append((s.symbol, r.ev.strategy.id))
-    if f["matches_only"]:  # every listed setup meets all its rules, so the column says nothing
-        for x in data:
-            x.pop("Rules")
+    for s in rows:
+        setups = direction_setups(s, group)
+        best = setups[0]
+        data.append({"Symbol": s.symbol, "Chg %": s.change_pct, "Best setup": best.ev.strategy.name,
+                     "Score": best.score, "Also matches": ", ".join(r.ev.strategy.name for r in setups[1:])})
+        picks.append((s.symbol, best.ev.strategy.id))
     return data, picks
 
 
-def _table_key(f: dict) -> str:
-    sig = repr(sorted((k, tuple(v) if isinstance(v, list) else v) for k, v in f.items()))
+def _table_key(f: dict, group: str) -> str:
+    sig = repr(sorted((k, tuple(v) if isinstance(v, list) else v) for k, v in f.items())) + group
     return "opps_" + hashlib.md5(sig.encode()).hexdigest()[:10]
 
 
-def _top_strip(cfg: Config, rows: list[SymbolRow], cutoffs, selected: str | None, table_key: str) -> None:
-    top = [s for s in rows if s.best.cand][:TOP_N]
-    if not top:
-        return
-    for col, s in zip(st.columns(TOP_N), top, strict=False):
-        b = s.best
-        with col.container(border=True):
-            st.markdown(f"**{s.symbol}** {_pct_md(s.change_pct, scale=1, nd=2)}",
-                        help=card_tooltip(_description(cfg, s.symbol)))
-            st.caption(b.ev.strategy.name)
-            st.markdown(f"<span class='scn-score'>{b.cand.score:.0f}</span> "
-                        f"{TIER_BADGE[tier(b.cand.score, cutoffs)]}", unsafe_allow_html=True)
-            st.button("Open", key=f"top_{s.symbol}", width="stretch", on_click=_select,
-                      args=(s.symbol, b.ev.strategy.id, table_key),
-                      type="primary" if s.symbol == selected else "secondary")
-
-
-def _opportunity_table(data: list[dict], picks: list[tuple[str, str | None]], f: dict, key: str,
+def _opportunity_table(data: list[dict], picks: list[tuple[str, str | None]], group: str, key: str,
                        selected: str | None) -> None:
     if not data:
-        st.info("Nothing matches these filters." + (" Try **Include near misses**." if f["matches_only"] else ""))
+        st.info(f"No {group.lower()} candidates with these filters. The watch list shows setups that are close.")
         return
     df = pd.DataFrame(data)
-    sid = st.session_state.get(f"strat_{selected}")  # "by setup" rows mark the open (symbol, strategy) only
-    df.insert(0, "", ["▶" if sym == selected and (pick_sid is None or pick_sid == sid) else ""
-                      for sym, pick_sid in picks])
+    df.insert(0, "", ["▶" if sym == selected else "" for sym, _ in picks])
     st.dataframe(
         df, hide_index=True, on_select="rerun", selection_mode="single-row", key=key,
         height=min(len(df), TABLE_ROWS) * 35 + 38,
@@ -316,14 +293,13 @@ def _opportunity_table(data: list[dict], picks: list[tuple[str, str | None]], f:
             "": st.column_config.TextColumn(width=16),
             "Symbol": st.column_config.TextColumn(width=62),
             "Chg %": st.column_config.NumberColumn(format="%+.2f%%", width=64),
-            "Setup": st.column_config.TextColumn(width=160),
-            "Tier": st.column_config.TextColumn(width=36, help="A = top 20% of this run's scores, B = next 40%."),
-            "Score": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.0f", width=84),
-            "Rules": st.column_config.TextColumn(width=48, help="Rules met / rules (pending counts as not met)"),
-            "More": st.column_config.TextColumn(width=44, help="Other strategies that also match this symbol."),
+            "Best setup": st.column_config.TextColumn(width=150),
+            "Score": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.0f", width=84,
+                                                     help="Score (0–100) of the best setup in this direction."),
+            "Also matches": st.column_config.TextColumn(help="Other strategies in this direction that also match."),
         },
     )
-    st.caption(f"{len(df)} rows · pick one to open it")
+    st.caption(f"{len(df)} tickers · pick one to open it")
 
 
 # ----------------------------------------------------------------------------------------------
@@ -331,10 +307,19 @@ def _opportunity_table(data: list[dict], picks: list[tuple[str, str | None]], f:
 # ----------------------------------------------------------------------------------------------
 
 
-def _strategy_label(r, cutoffs) -> str:
+def _strategy_label(r) -> str:
     if r.cand:
-        return f"{r.ev.strategy.name} · {r.cand.score:.0f} {tier(r.cand.score, cutoffs)}"
+        return f"{r.ev.strategy.name} · {r.cand.score:.0f}"
     return f"{r.ev.strategy.name} · {r.met}/{r.total}"
+
+
+def _setup_summary_md(row: SymbolRow) -> str:
+    """One line with the ticker's matched setups by direction, e.g. "**▲ Bullish** Wheel 65 · **▼ Bearish** —"."""
+    parts = []
+    for g, rows in setup_summary(row).items():
+        names = ", ".join(f"{r.ev.strategy.name} {r.score:.0f}" for r in rows) or "—"
+        parts.append(f"**{DIRECTION_ICON[g]} {g}** {names}")
+    return " · ".join(parts)
 
 
 def _ladder(d: dict) -> None:
@@ -401,11 +386,12 @@ def _evidence_tabs(d: dict, cfg: Config, symbol: str, sid: str) -> None:
         st.caption(f"Sector ETF: {d['sector'] or 'n/a'} · ATR {d['atr']:.2f}")
 
 
-def _setup(res: RunResult, cfg: Config, symbol: str, cutoffs) -> None:
-    rows = strategy_rows(res, symbol)
-    if not rows:
+def _setup(res: RunResult, cfg: Config, symbol: str) -> None:
+    srow = next((r for r in symbol_rankings(res) if r.symbol == symbol), None)
+    if srow is None:
         st.info(f"No strategies were evaluated for {symbol}.")
         return
+    rows = pane_rows(srow)
     key = f"strat_{symbol}"
     ids = [r.ev.strategy.id for r in rows]
     if st.session_state.get(key) not in ids:
@@ -415,8 +401,13 @@ def _setup(res: RunResult, cfg: Config, symbol: str, cutoffs) -> None:
     desc = _description(cfg, symbol)
     sa = res.analyses[symbol]
     close = float(sa.bars.close[sa.last_idx])
+    d_group = direction(srow)
+    badge = DIRECTION_BADGE[d_group] if d_group else ":gray-badge[no match]"
     st.markdown(f"### {symbol} <span class='scn-muted'>{desc[0] if desc else ''}</span>",
                 unsafe_allow_html=True, help=card_tooltip(desc))
+    st.markdown(f"{badge} {_setup_summary_md(srow)}",
+                help="Matched setups by direction (score). Every active strategy is evaluated; pick one below "
+                     "to see its rules.")
     st.markdown(f"**{close:,.2f}** {_pct_md(change_pct(sa), scale=1, nd=2)} · RSI "
                 f"{float(sa.bars.rsi[sa.last_idx]):.1f} · ATR {float(sa.bars.atr[sa.last_idx]):.2f}"
                 + (f" · sector {sa.sector_etf}" if sa.sector_etf else ""))
@@ -427,7 +418,7 @@ def _setup(res: RunResult, cfg: Config, symbol: str, cutoffs) -> None:
         charts[symbol] = symbol_chart(res, symbol)
     st.plotly_chart(charts[symbol], width="stretch", theme="streamlit", key=f"chart_{symbol}",
                     config={"displaylogo": False})
-    st.pills("Strategy", ids, key=key, format_func=lambda s: _strategy_label(by_id[s], cutoffs),
+    st.pills("Strategy", ids, key=key, format_func=lambda s: _strategy_label(by_id[s]),
              label_visibility="collapsed", required=True, wrap=True)
     sid = st.session_state.get(key) or ids[0]
     d = detail_view(res, cfg, symbol, sid)
@@ -444,11 +435,10 @@ def _setup(res: RunResult, cfg: Config, symbol: str, cutoffs) -> None:
             icon=":material/download:", on_click="ignore", type="tertiary", key=f"export_{symbol}_{sid}",
             help="The HTML report for this setup")
 
-    t = tier(row.cand.score if row.cand else None, cutoffs)
     m = st.columns(4)
-    m[0].metric(f"Score · tier {t}" if t else "Score", f"{row.cand.score:.1f}" if row.cand else "—", border=True,
-                help="Candidate score (0–100) for this strategy. Tiers are relative to this run."
-                if row.cand else "No full match, so no candidate score.")
+    m[0].metric("Score", f"{row.cand.score:.1f}" if row.cand else "—", border=True,
+                help="Candidate score (0–100) for this strategy." if row.cand
+                else "No full match, so no candidate score.")
     m[1].metric("Rules met", f"{row.met}/{row.total}", border=True)
     m[2].metric("Trend", trend_text(d["trend"]), border=True)
     m[3].metric("Flow", humanize(d["flow_label"]), border=True)
@@ -468,29 +458,27 @@ def _results() -> None:
         st.info("Pick a session date above and press **Run analysis**. Every run scans all enabled symbols and "
                 "active strategies; filtering happens afterwards.", icon=":material/play_circle:")
         return
-    cutoffs = st.session_state.get("cutoffs") or tier_cutoffs([c.score for c in res.candidates])
     ov = overview(res, cfg)
     _apply_table_pick("watch_table", _watch_rows(ov)[1])
     _overview(ov)
 
     f = _filters(res, cfg)
-    rows = opportunity_rows(res, f["symbols"], f["strategy_ids"], f["bias_groups"], f["sectors"], f["matches_only"])
-    data, picks = _list_rows(rows, f, cutoffs)
-    key = _table_key(f)
-    _apply_table_pick(key, picks)
-    selected = st.session_state.get("selected_symbol")
-    if selected not in res.analyses:
-        selected = picks[0][0] if picks else None
-        if selected:
-            st.session_state["selected_symbol"] = selected
-
-    _top_strip(cfg, rows, cutoffs, selected, key)
+    groups = direction_groups(res, f["symbols"], f["strategy_ids"], f["sectors"])
     left, right = st.columns([5, 7], gap="large")
     with left, st.container(key="opps_list"):
-        _opportunity_table(data, picks, f, key, selected)
+        group = _direction_pick(groups)
+        data, picks = _list_rows(groups[group], group)
+        key = _table_key(f, group)
+        _apply_table_pick(key, picks)
+        selected = st.session_state.get("selected_symbol")
+        if selected not in res.analyses:
+            selected = picks[0][0] if picks else None
+            if selected:
+                st.session_state["selected_symbol"] = selected
+        _opportunity_table(data, picks, group, key, selected)
     with right:
         if selected:
-            _setup(res, cfg, selected, cutoffs)
+            _setup(res, cfg, selected)
 
 
 # ----------------------------------------------------------------------------------------------
