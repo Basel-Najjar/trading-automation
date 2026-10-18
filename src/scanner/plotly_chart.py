@@ -172,10 +172,14 @@ def _button_px(label: str) -> int:
 
 def price_figure(sa: SymbolAnalysis, levels: list[Level], signal_bars: list[int], chart_bars: int, k: float,
                  rsi_ob: float, rsi_os: float, highlight: set[str] | None = None,
-                 invalidation: float | None = None, overlays: list[Overlay] | None = None) -> go.Figure:
+                 invalidation: float | None = None, overlays: list[Overlay] | None = None,
+                 half_bar: timedelta = HALF_DAY, session_breaks: bool = True,
+                 uirevision: str | None = None) -> go.Figure:
     """`highlight`: ids of the levels the setup is about (drawn solid with a price tag; the others are faded).
     `invalidation`: price drawn as a dotted line with a tag. `overlays`: comparison lines, each on its own
-    right-hand axis."""
+    right-hand axis. `half_bar` is half a bar's width (signal shading, x padding); weekly bars pass ~3.5 days and
+    `session_breaks=False`, since weekend/holiday rangebreaks only make sense for daily bars. `uirevision` keeps
+    the viewer's zoom across reruns (default: the symbol)."""
     b = sa.bars
     last = sa.last_idx
     start = max(0, last - chart_bars + 1)
@@ -238,7 +242,7 @@ def price_figure(sa: SymbolAnalysis, levels: list[Level], signal_bars: list[int]
     # signal bars
     for t in sorted(set(signal_bars)):
         if 0 <= t <= last:
-            fig.add_vrect(x0=x[t] - HALF_DAY, x1=x[t] + HALF_DAY, fillcolor=SIGNAL_FILL, line_width=0, layer="below",
+            fig.add_vrect(x0=x[t] - half_bar, x1=x[t] + half_bar, fillcolor=SIGNAL_FILL, line_width=0, layer="below",
                           row=1, col=1)
 
     # RSI pane
@@ -268,12 +272,14 @@ def price_figure(sa: SymbolAnalysis, levels: list[Level], signal_bars: list[int]
         legend={"orientation": "h", "yanchor": "top", "y": -0.06, "xanchor": "left", "x": 0},
         updatemenus=menus,
         xaxis_rangeslider_visible=False,
-        uirevision=sa.symbol,  # keep the viewer's zoom/pan across reruns of the same symbol
+        uirevision=uirevision or sa.symbol,  # keep the viewer's zoom/pan across reruns of the same symbol
     )
-    breaks = [{"bounds": ["sat", "mon"]}]
-    if missing := missing_sessions(b.dates[:last + 1]):
-        breaks.append({"values": missing})
-    fig.update_xaxes(rangebreaks=breaks, range=[x[start] - HALF_DAY, x[last] + HALF_DAY])
+    breaks = []
+    if session_breaks:
+        breaks.append({"bounds": ["sat", "mon"]})
+        if missing := missing_sessions(b.dates[:last + 1]):
+            breaks.append({"values": missing})
+    fig.update_xaxes(rangebreaks=breaks, range=[x[start] - half_bar, x[last] + half_bar])
     # tickmode auto: an overlaying axis otherwise syncs its ticks to the hidden volume axis (odd price ticks)
     fig.update_yaxes(range=[lo, hi], tickformat=",.2f", side="left", showgrid=True, tickmode="auto", **PRICE_PANE)
     vmax = float(vol[start:last + 1].max()) if last >= start else 0.0

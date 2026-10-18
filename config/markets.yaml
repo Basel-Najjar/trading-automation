@@ -1,0 +1,27 @@
+# markets.yaml: lists for the Markets page (independent of universe.csv and of scanner runs).
+# A series is a ticker (SPY) or a ratio NUM/DEN (XLK/SPY). The app's Lists tab rewrites the three lists and keeps
+# the resolutions block below as written. Each resolution's `settings:` overrides settings.yaml for that resolution.
+
+levels: [SPY, QQQ, IWM, TLT, GLD, SLV, EEM, QQQ/SPY, IWM/SPY, GLD/TLT, XLY/XLP]
+
+rrg:
+  benchmark: SPY
+  members: [XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLRE, XLU, XLV, XLY]
+
+pca:
+  members: [SPY, QQQ, IWM, EEM, TLT, GLD, SLV, UUP, HYG, XLE]
+
+resolutions:
+  daily:
+    display_years: 1 # chart window
+    history_years: 2 # analysed bars (warm-up for SMA200, ATR, pivots)
+    rrg: { window: 14, tail: 10 } # z-score window and tail length, in bars
+    pca: { window: 63, components: 3 } # rolling window (~1 quarter) and components shown
+  weekly:
+    display_years: 5
+    history_years: 8
+    rrg: { window: 10, tail: 10 }
+    pca: { window: 52, components: 3 } # ~1 year per window
+    settings: # bar-count settings scaled for weekly bars; everything else comes from settings.yaml
+      pivots: { pivot_window: 3 }
+      levels: { recency_half_life_bars: 26, trendline_lookback_bars: 104 }

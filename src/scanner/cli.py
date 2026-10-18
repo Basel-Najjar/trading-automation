@@ -269,8 +269,12 @@ def validate(
     config_dir: ConfigDir = Path("config"),
     offline: Annotated[bool, typer.Option("--offline", help="Skip the unknown-ticker check (no network).")] = False,
 ) -> None:
-    """Lint universe, sector map, strategies and settings; list unknown tickers."""
+    """Lint universe, sector map, strategies, settings and markets.yaml; list unknown tickers."""
+    from scanner.markets.config import MARKETS, load_markets
+
     cfg, issues = load_config(config_dir)
+    if (Path(config_dir) / MARKETS).exists():  # the Markets page's lists (optional file)
+        issues += load_markets(config_dir, cfg.settings if cfg else None)[1]
     for i in issues:
         typer.echo(str(i))
     errors = [i for i in issues if i.severity == "error"]

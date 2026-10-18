@@ -28,6 +28,7 @@ uv run scanner run               # writes reports/<date>/scan.html
 | `settings.yaml` | All technical parameters, with defaults. Keys marked `[added]` are not in the spec's §6.9 (see Assumptions). |
 | `manual_levels.yaml` | Optional owner-drawn levels (see `manual_levels.example.yaml`). |
 | `expected_reads.csv` | Optional chart reads for `check-reads` (see `expected_reads.example.csv`). Separate multiple expected items with `;`. |
+| `markets.yaml` | Lists for the app's **Markets** page, one per tool (`levels`, `rrg` with its `benchmark`, `pca`). Each holds tickers or `NUM/DEN` ratios. Also holds per-resolution parameters. Independent of `universe.csv`. |
 
 The signal vocabulary and its exact definitions are in [docs/signals.md](docs/signals.md).
 
@@ -42,7 +43,7 @@ scanner run --refresh                        # re-download instead of using the 
 scanner replay --start 2026-06-01 --end 2026-09-30   # signals_log.csv with forward outcomes
 scanner explain --symbol AAPL --strategy bull_put_spread [--as-of DATE]
 scanner check-reads                          # compare replay with config/expected_reads.csv
-scanner validate [--offline]
+scanner validate [--offline]                 # also checks config/markets.yaml when present
 scanner cache info | scanner cache refresh
 ```
 
@@ -52,7 +53,8 @@ scanner cache info | scanner cache refresh
 uv run streamlit run src/scanner/app.py      # run from the repository root (reads .streamlit/config.toml)
 ```
 
-The Results tab goes from high level to detail: overview, then the list, then one setup, then its evidence.
+The app has two pages, **Scanner** and **Markets**, in the top navigation. On the Scanner page, the Results tab goes
+from high level to detail: overview, then the list, then one setup, then its evidence.
 
 - **Run.** At the top, pick a session date (default today), optionally tick **Force refresh**, then press **Run
   analysis**. Every run scans all enabled symbols and all active strategies. All filtering happens after the scan.
@@ -100,6 +102,37 @@ The Results tab goes from high level to detail: overview, then the list, then on
   edit first and writes nothing if there are errors. It then rewrites `universe.csv` and the `benchmark:` line in
   `settings.yaml`.
 - **Another config directory.** Set `SCANNER_CONFIG_DIR` to point the app at it.
+
+### Markets page
+
+This is a weekly market-structure view. It is separate from the scanner: it has its own lists (`config/markets.yaml`)
+and its own **Refresh prices** button, and it never runs or clears a scan. It shares the Parquet cache, so symbols in
+both are downloaded once. Opening the page reads only the cache. One refresh covers the longest history any resolution
+needs (8 years by default), so switching resolution never downloads.
+
+- **Resolution.** **Daily (1Y)** or **Weekly (5Y)**. Weekly bars are built from daily bars, with weeks ending Friday.
+  Each bar is dated by its last session, so a holiday Friday's week is dated Thursday. A week still in progress is
+  drawn faded, and its signals are *pending*, like the scanner's provisional bar. Each resolution analyses more history
+  than it shows, to warm up SMA200, ATR and pivots. The weekly `settings:` block scales the bar-count parameters
+  (pivot window, recency half-life, trendline lookback). Everything else comes from `settings.yaml`.
+- **Structure.** Each `levels` series runs through the scanner's own engine: trend state (B1), SMA/horizontal/
+  diagonal levels, B5 2-bar breaks, holds and engulfing patterns. The table shows trend, nearest support and
+  resistance (and their distance in ATRs), the latest fired signal and the closest near-signal. *1 of 2 closes* means
+  one close beyond the zone, with the confirming close still due. Pick a row to see the scanner's chart for it.
+  Ratios use body-only candles: open and close are exact ratios, and high/low are the larger/smaller of the two.
+- **Rotation (RRG).** Each member is plotted against the benchmark using the standard z-score approximation of
+  JdK's proprietary formulas. RS-Ratio = 100 + z-score of price/benchmark over N bars. RS-Momentum = 100 + z-score
+  of RS-Ratio's rate of change. Quadrants are Leading, Weakening, Lagging and Improving. The table gives each
+  member's quadrant now and at the start of the tail, its heading and its speed. A slider shortens the tail.
+- **Correlation (PCA).** This is a rolling PCA of the correlation matrix of log returns (a ratio's return is the
+  difference of its legs'). It shows PC1..k's share of variance over time (the top of the stack is the absorption
+  ratio, which rises when everything moves together), the average pairwise correlation, loadings now vs one window
+  earlier, and correlation heatmaps now and changed. Loading signs are aligned window to window, so a sign flip is not
+  read as a shift.
+- **Lists.** Edit the three lists and the RRG benchmark. Saving validates first, writes nothing on errors, and keeps
+  the `resolutions:` block as written. Press **Refresh prices** after adding tickers.
+- **Export HTML.** An offline snapshot of all three views at the current resolution, with plotly.js embedded once
+  (about 7–8 MB with the default lists).
 
 Use `uv run scanner …`, or activate `.venv`. All commands accept `--config-dir/-c`. Output commands also accept
 `--reports-dir`.

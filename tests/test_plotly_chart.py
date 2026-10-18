@@ -164,3 +164,12 @@ def test_overlays_get_their_own_right_axes(sa):
 def test_no_overlays_adds_no_axes(sa):
     fig = _fig(sa)
     assert "yaxis4" not in fig.layout.to_plotly_json()
+
+
+def test_weekly_mode_drops_session_breaks_and_widens_bars(sa):
+    half = timedelta(days=3, hours=12)
+    fig = price_figure(sa, chart_levels(sa), [sa.last_idx], 150, 0.25, 70, 30, half_bar=half, session_breaks=False,
+                       uirevision="X:weekly")
+    assert not fig.layout.xaxis.rangebreaks and fig.layout.uirevision == "X:weekly"
+    assert fig.layout.xaxis.range[1] == _midnight(sa.bars.dates[sa.last_idx]) + half
+    assert _fig(sa).layout.xaxis.rangebreaks  # the default (daily) keeps them

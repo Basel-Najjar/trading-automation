@@ -201,11 +201,11 @@ def test_no_out_of_scope_data_paths():
     """
     forbidden = {"orats", "options", "chain", "earnings", "earning", "fundamental", "fundamentals", "news",
                  "holders", "calendar_events", "financials", "recommendations"}
-    for p in (ROOT / "src" / "scanner").glob("*.py"):
+    for p in (ROOT / "src" / "scanner").rglob("*.py"):
         src = p.read_text(encoding="utf-8")
         names = {t.string for t in tokenize.generate_tokens(io.StringIO(src).readline) if t.type == tokenize.NAME}
         allowed = set()
-        if p.name == "app.py":
+        if p.name == "scanner_page.py":
             allowed.add("options")  # Streamlit's dropdown keyword (SelectboxColumn(options=...)), not option chains
         bad = sorted(n for n in names - allowed if forbidden & set(n.lower().split("_")))
         assert not bad, (p.name, bad)
