@@ -2,13 +2,14 @@
 detail:
 
 1. Overview band: session, benchmark, counts, watch list, skipped symbols and a sector strip that filters the list.
-2. Candidates: tickers split into Bullish / Bearish / Neutral by their matched setups (a switcher picks the
-   group), with filters. Every active strategy is still evaluated against every ticker.
-3. Setup pane beside the list: direction, setups summarised by direction, chart, strategy switcher, key numbers,
-   one line per rule and a price ladder.
-4. Evidence tabs in the pane (why, levels, about), plus a link to the strategy's criteria.
+2. Scan lists: a switcher picks Bullish, Non-bearish, Neutral, Non-bullish or Bearish; each lists the tickers that
+   reach its threshold, ranked
+   by the weighted % of its criteria met. A ticker can be in more than one list.
+3. Setup pane beside the list: the scans that list the ticker, chart, scan switcher (with each scan's match %), key
+   numbers, a checklist of the scan's criteria and a price ladder.
+4. Evidence tabs in the pane (why, levels, about), plus a link to the scan's criteria.
 
-Other tabs: the scan criteria (with rule editing) and the symbol universe.
+Other tabs: the scan criteria (with editing) and the symbol universe.
 
 Rendered by the navigation shell in app.py (run from the repository root:  uv run streamlit run src/scanner/app.py).
 """
@@ -24,51 +25,51 @@ import pandas as pd
 import streamlit as st
 
 from scanner.app_view import (
+    DIRECTION_ICON,
     STATUS_ICON,
-    SymbolRow,
+    best_scan,
     card_tooltip,
     change_pct,
     detail_view,
-    direction,
-    direction_groups,
-    direction_setups,
     humanize,
+    listed_scans,
     overview,
-    pane_rows,
-    setup_summary,
-    strategy_recipe,
+    scan_lists,
+    scan_recipe,
     symbol_chart,
-    symbol_rankings,
     ticker_description,
+    ticker_scans,
     trend_text,
 )
-from scanner.config import Config, Strategy, load_config
+from scanner.config import Config, Scan, load_config
 from scanner.config_edit import (
-    ALIGNMENT_CHOICES,
+    CHECK_CHOICES,
     COLUMNS,
-    DEFAULT_STRATEGIES,
-    NOT_EXTENDED_CHOICES,
-    STRATEGIES,
-    TREND_CHOICES,
-    modified_strategies,
-    restore_default_strategies,
+    CRITERION_COLUMNS,
+    DEFAULT_SCANS,
+    SCANS,
+    VALUE_HELP,
+    criterion_rows,
+    modified_scans,
+    restore_default_scans,
     save_edits,
-    save_strategy,
-    technical_values,
+    save_scan,
     universe_table,
 )
-from scanner.criteria import global_criteria, strategy_criteria
+from scanner.criteria import global_criteria, scan_criteria
 from scanner.data import Profile, fetch_profiles
-from scanner.models import SIGNAL_NAMES, Tri
+from scanner.models import MAX_LOOKBACK_BARS, SIGNAL_NAMES, ScanResult, Tri
 from scanner.pipeline import RunResult, run_scan
 from scanner.ui import picked_rows, show_errors, table_height
 
 CONFIG_DIR = Path(os.environ.get("SCANNER_CONFIG_DIR", "config"))
 TABLE_ROWS = 18  # visible rows in the opportunity list before it scrolls
 TAB_RESULTS, TAB_CRITERIA, TAB_CONFIG = "Results", "Criteria", "Config"
-DIRECTION_ICON = {"Bullish": "▲", "Bearish": "▼", "Neutral": "↔"}
-DIRECTION_BADGE = {"Bullish": ":green-badge[▲ Bullish]", "Bearish": ":red-badge[▼ Bearish]",
-                   "Neutral": ":gray-badge[↔ Neutral]"}
+DIRECTION_BADGE = {"bullish": ":green-badge[▲ Bullish]", "non_bearish": ":blue-badge[△ Non-bearish]",
+                   "neutral": ":gray-badge[↔ Neutral]", "non_bullish": ":orange-badge[▽ Non-bullish]",
+                   "bearish": ":red-badge[▼ Bearish]"}
+SHORT_NAME = {"bullish": "Bull", "non_bearish": "Non-bear", "neutral": "Neutral", "non_bullish": "Non-bull",
+              "bearish": "Bear"}  # the scan switcher has five segments in a narrow column
 STATUS_MD = {Tri.TRUE: ":green[**✓**]", Tri.FALSE: ":red[**✗**]", Tri.PENDING: ":orange[**⏳**]"}
 TREND_COLOR = {"uptrend": "green", "downtrend": "red"}
 DISCLAIMER = ("Automated technical screening based on the owner's predefined rules; not investment advice. "
@@ -93,13 +94,13 @@ def _load() -> Config | None:
 def _clear_results() -> None:
     for key in list(st.session_state):
         if key in ("res", "cfg", "selected_symbol", "shown_group", "profiles", "charts") or \
-                str(key).startswith(("strat_", "opps_", "_pick_", "watch_table")):
+                str(key).startswith(("scan_", "opps_", "_pick_", "watch_table")):
             st.session_state.pop(key, None)
 
 
 def _run(cfg: Config, as_of: date, refresh: bool) -> None:
     _clear_results()
-    with st.spinner("Loading prices and scanning every symbol and strategy…"):
+    with st.spinner("Loading prices and running the scans…"):
         res = run_scan(cfg, as_of=as_of, refresh=refresh)
     if not res.analyses:
         st.error("No symbols could be analysed:\n\n" + "\n".join(f"- {s}: {why}" for s, why in res.skipped)
@@ -118,9 +119,8 @@ def _description(cfg: Config, symbol: str) -> tuple[str, str] | None:
     return ticker_description(cfg, profiles, symbol)
 
 
-def _name(cfg: Config, sid: str) -> str:
-    stg = cfg.strategy(sid)
-    return stg.name if stg else sid
+def _scan_title(name: str) -> str:
+    return f"{DIRECTION_ICON.get(name, '')} {humanize(name)}"
 
 
 def _pct_md(x: float | None, scale: float = 100.0, nd: int = 1) -> str:
@@ -140,14 +140,14 @@ def _trend_md(state: str) -> str:
 # ----------------------------------------------------------------------------------------------
 
 
-def _select(symbol: str, strategy_id: str | None = None, clear: str | None = None) -> None:
-    """Show `symbol` (and `strategy_id`, else its best match) in the setup pane. `clear` is a table key whose
-    row selection is dropped, so picking the same row there again counts as a new pick."""
+def _select(symbol: str, scan: str | None = None, clear: str | None = None) -> None:
+    """Show `symbol` (and `scan`, else its best scan) in the setup pane. `clear` is a table key whose row selection
+    is dropped, so picking the same row there again counts as a new pick."""
     st.session_state["selected_symbol"] = symbol
-    if strategy_id:
-        st.session_state[f"strat_{symbol}"] = strategy_id
+    if scan:
+        st.session_state[f"scan_{symbol}"] = scan
     else:
-        st.session_state.pop(f"strat_{symbol}", None)
+        st.session_state.pop(f"scan_{symbol}", None)
     if clear:
         st.session_state.pop(clear, None)
         st.session_state.pop(f"_pick_{clear}", None)
@@ -163,8 +163,8 @@ def _apply_table_pick(key: str, picks: list[tuple[str, str | None]]) -> None:
         _select(*pick)
 
 
-def _to_criteria(strategy_id: str) -> None:
-    st.session_state["criteria_focus"] = strategy_id
+def _to_criteria(scan: str) -> None:
+    st.session_state["criteria_focus"] = scan
     st.session_state["main_tab"] = TAB_CRITERIA
 
 
@@ -193,12 +193,13 @@ def _overview(ov: dict) -> None:
             r = m["returns"]
             market.markdown(f"**{m['symbol']}** {m['close']:,.2f} {_trend_md(m['trend'].state)} · "
                             f"1m {_pct_md(r.get('1m'))} · 3m {_pct_md(r.get('3m'))}", help=m["trend"].reason)
-        dirs = ov["directions"]
-        counts.markdown(" · ".join(f"{DIRECTION_ICON[g]} **{n}** {g.lower()}" for g, n in dirs.items())
+        counts.markdown(" · ".join(f"{DIRECTION_ICON[g]} **{n}**" for g, n in ov["counts"].items())
                         + f" of {ov['n_symbols']} symbols",
-                        help=f"{ov['n_candidates']} matched setups across every active strategy. A ticker is "
-                             "bullish or bearish when its matches are on one side, neutral when they are neutral "
-                             "or on both sides.")
+                        help="Tickers listed per scan: "
+                             + ", ".join(f"{DIRECTION_ICON[g]} {humanize(g)}" for g in ov["counts"])
+                             + f" ({ov['n_listed']} distinct). A ticker is listed when the "
+                             "weighted % of the scan's criteria it meets reaches the scan's minimum; it can be in "
+                             "more than one scan.")
         with watch:
             _watch_popover(ov)
         if ov["skipped"] or ov["warnings"]:
@@ -214,20 +215,20 @@ def _overview(ov: dict) -> None:
         if ov["sectors"]:
             st.pills("Sector", [e["etf"] for e in ov["sectors"]], selection_mode="multi", key="f_sector",
                      format_func=lambda etf: _sector_label(next(e for e in ov["sectors"] if e["etf"] == etf)),
-                     help="Sector ETF · trend · 1-month return · symbols with a setup. Pick to filter the list.")
+                     help="Sector ETF · trend · 1-month return · symbols listed in a scan. Pick to filter the list.")
 
 
 def _watch_rows(ov: dict) -> tuple[list[dict], list[tuple[str, str | None]]]:
     data = [{"Symbol": w.symbol, "Near": humanize(w.near.signal), "ATR away": w.near.distance_atr,
-             "Strategies": ", ".join(name for _, name in w.strategies)} for w in ov["watch"]]
-    return data, [(w.symbol, w.strategies[0][0] if w.strategies else None) for w in ov["watch"]]
+             "Scans": ", ".join(humanize(n) for n in w.scans)} for w in ov["watch"]]
+    return data, [(w.symbol, w.scans[0] if w.scans else None) for w in ov["watch"]]
 
 
 def _watch_popover(ov: dict) -> None:
     if not ov["watch"]:
         return
     with st.popover(f"Watch list · {len(ov['watch'])}", type="tertiary", icon=":material/visibility:",
-                    help="Close to a setup: a signal is near but has not fired yet."):
+                    help="Below a scan's minimum, but a signal is near: if it fired, the ticker would be listed."):
         data, _ = _watch_rows(ov)
         st.caption("Pick a row to open it.")
         st.dataframe(pd.DataFrame(data), hide_index=True, on_select="rerun", selection_mode="single-row",
@@ -240,34 +241,31 @@ def _watch_popover(ov: dict) -> None:
 # ----------------------------------------------------------------------------------------------
 
 
-def _filters(res: RunResult, cfg: Config) -> dict:
-    evaluated = sorted({ev.strategy.id for evs in res.evals.values() for ev in evs}, key=lambda s: _name(cfg, s))
-    with st.container(horizontal=True, vertical_alignment="bottom", gap="medium"):
-        strategies = st.multiselect("Strategy", evaluated, key="f_strategy", placeholder="All strategies",
-                                    format_func=lambda s: _name(cfg, s), width=300)
-        symbols = st.multiselect("Symbol", sorted(res.analyses), key="f_symbol", placeholder="All symbols",
-                                 width=220)
-    return {"strategy_ids": strategies, "symbols": symbols, "sectors": st.session_state.get("f_sector") or []}
+def _filters(res: RunResult) -> dict:
+    symbols = st.multiselect("Symbol", sorted(res.analyses), key="f_symbol", placeholder="All symbols", width=260)
+    return {"symbols": symbols, "sectors": st.session_state.get("f_sector") or []}
 
 
-def _direction_pick(groups: dict[str, list[SymbolRow]]) -> str:
-    """The Bullish / Bearish / Neutral switcher above the list. Defaults to the first group with tickers."""
+def _direction_pick(groups: dict[str, list[ScanResult]]) -> str:
+    """The scan switcher above the list. Defaults to the first scan with tickers."""
     if st.session_state.get("f_direction") not in groups:
         st.session_state["f_direction"] = next((g for g, rows in groups.items() if rows), next(iter(groups)))
     return st.segmented_control(
-        "Direction", list(groups), key="f_direction", required=True, label_visibility="collapsed",
-        format_func=lambda g: f"{DIRECTION_ICON[g]} {g} · {len(groups[g])}") or st.session_state["f_direction"]
+        "Scan", list(groups), key="f_direction", required=True, label_visibility="collapsed",
+        format_func=lambda g: f"{DIRECTION_ICON.get(g, '')} {SHORT_NAME.get(g, g)} · {len(groups[g])}",
+        help="Scans from most bullish to most bearish: " + " · ".join(_scan_title(g) for g in groups),
+    ) or st.session_state["f_direction"]
 
 
-def _list_rows(rows: list[SymbolRow], group: str) -> tuple[list[dict], list[tuple[str, str | None]]]:
-    """Table rows for one direction group and, per row, the (symbol, strategy) a pick opens."""
+def _list_rows(res: RunResult, rows: list[ScanResult]) -> tuple[list[dict], list[tuple[str, str | None]]]:
+    """Table rows for one scan and, per row, the (symbol, scan) a pick opens."""
     data, picks = [], []
-    for s in rows:
-        setups = direction_setups(s, group)
-        best = setups[0]
-        data.append({"Symbol": s.symbol, "Chg %": s.change_pct, "Best setup": best.ev.strategy.name,
-                     "Score": best.score, "Also matches": ", ".join(r.ev.strategy.name for r in setups[1:])})
-        picks.append((s.symbol, best.ev.strategy.id))
+    for r in rows:
+        sa = res.analyses[r.symbol]
+        also = [humanize(n) for n in listed_scans(res, r.symbol) if n != r.scan]
+        data.append({"Symbol": r.symbol, "Chg %": change_pct(sa), "Match": r.pct, "Met": f"{r.met}/{r.total}",
+                     "Trend": trend_text(sa.trend.state), "Also in": ", ".join(also)})
+        picks.append((r.symbol, r.scan))
     return data, picks
 
 
@@ -279,7 +277,8 @@ def _table_key(f: dict, group: str) -> str:
 def _opportunity_table(data: list[dict], picks: list[tuple[str, str | None]], group: str, key: str,
                        selected: str | None) -> None:
     if not data:
-        st.info(f"No {group.lower()} candidates with these filters. The watch list shows setups that are close.")
+        st.info(f"No ticker reaches the {group} scan's minimum with these filters. The watch list shows tickers "
+                "that are close.")
         return
     df = pd.DataFrame(data)
     df.insert(0, "", ["▶" if sym == selected else "" for sym, _ in picks])
@@ -290,10 +289,11 @@ def _opportunity_table(data: list[dict], picks: list[tuple[str, str | None]], gr
             "": st.column_config.TextColumn(width=16),
             "Symbol": st.column_config.TextColumn(width=62),
             "Chg %": st.column_config.NumberColumn(format="%+.2f%%", width=64),
-            "Best setup": st.column_config.TextColumn(width=150),
-            "Score": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.0f", width=84,
-                                                     help="Score (0–100) of the best setup in this direction."),
-            "Also matches": st.column_config.TextColumn(help="Other strategies in this direction that also match."),
+            "Match": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.0f%%", width=90,
+                                                     help="Weighted % of this scan's criteria met."),
+            "Met": st.column_config.TextColumn(width=44, help="Criteria met / criteria in the scan."),
+            "Trend": st.column_config.TextColumn(width=100),
+            "Also in": st.column_config.TextColumn(help="Other scans that also list this ticker."),
         },
     )
     st.caption(f"{len(df)} tickers · pick one to open it")
@@ -304,23 +304,12 @@ def _opportunity_table(data: list[dict], picks: list[tuple[str, str | None]], gr
 # ----------------------------------------------------------------------------------------------
 
 
-def _strategy_label(r) -> str:
-    if r.cand:
-        return f"{r.ev.strategy.name} · {r.cand.score:.0f}"
-    return f"{r.ev.strategy.name} · {r.met}/{r.total}"
-
-
-def _setup_summary_md(row: SymbolRow) -> str:
-    """One line with the ticker's matched setups by direction, e.g. "**▲ Bullish** Wheel 65 · **▼ Bearish** —"."""
-    parts = []
-    for g, rows in setup_summary(row).items():
-        names = ", ".join(f"{r.ev.strategy.name} {r.score:.0f}" for r in rows) or "—"
-        parts.append(f"**{DIRECTION_ICON[g]} {g}** {names}")
-    return " · ".join(parts)
+def _scan_label(r: ScanResult) -> str:
+    return f"{_scan_title(r.scan)} · {r.pct:.0f}%" + (" ✓" if r.passed else "")
 
 
 def _ladder(d: dict) -> None:
-    st.markdown("**Price ladder**" + ("" if d["row"].cand else " :orange-badge[no full match]"),
+    st.markdown("**Price ladder**" + ("" if d["result"].passed else " :orange-badge[below the scan's minimum]"),
                 help="Alert prices for TradingView, with the last close for reference. Highest first.")
     df = pd.DataFrame(d["ladder"])
 
@@ -336,23 +325,15 @@ def _ladder(d: dict) -> None:
 
 
 def _rules(d: dict) -> None:
-    st.markdown("**Rules**")
+    st.markdown("**Criteria**")
     for line in d["rules"]:
-        st.markdown(f"{STATUS_MD[line.status]} **{line.label}**: {line.summary}")
+        weight = f" ×{line.weight:g}" if line.weight != 1 else ""
+        st.markdown(f"{STATUS_MD[line.status]} **{line.label}**{weight}: {line.summary}")
 
 
-def _evidence_tabs(d: dict, cfg: Config, symbol: str, sid: str) -> None:
+def _evidence_tabs(d: dict, cfg: Config, symbol: str, scan: str) -> None:
     why, levels, about = st.tabs(["Why", "Levels", "About"])
     with why:
-        if d["score"]:
-            total = sum(x[3] for x in d["score"])
-            st.markdown(f"**Score breakdown** · {total:.1f} points")
-            st.dataframe(pd.DataFrame([{"Component": humanize(n), "Fit": raw * 100, "Points": pts, "of": w,
-                                        "Note": note} for n, raw, w, pts, note in d["score"]]), hide_index=True,
-                         column_config={"Fit": st.column_config.ProgressColumn(min_value=0, max_value=100,
-                                                                               format="%.0f%%"),
-                                        "Points": st.column_config.NumberColumn(format="%.1f"),
-                                        "of": st.column_config.NumberColumn(format="%.0f", width=40)})
         if d["hits"]:
             st.markdown("**Signals that fired**")
             st.dataframe(pd.DataFrame(d["hits"]), hide_index=True,
@@ -361,13 +342,13 @@ def _evidence_tabs(d: dict, cfg: Config, symbol: str, sid: str) -> None:
         st.markdown(f"**Trend**: {d['trend_reason']}")
         if d["flow"]:
             st.markdown("**Flow**: " + " · ".join(f"{k} {humanize(v).lower()}" for k, v in d["flow"]))
-        with st.expander("Raw rule evidence"):
+        with st.expander("Raw criterion evidence"):
             for line in d["rules"]:
-                st.markdown(f"{STATUS_ICON[line.status]} `{line.rule}`: {line.detail}")
+                st.markdown(f"{STATUS_ICON[line.status]} `{line.check}`: {line.detail}")
                 if line.evidence:
                     st.caption("  \n".join(line.evidence))
-        st.button("How this strategy is scanned", icon=":material/arrow_forward:", type="tertiary",
-                  key=f"why_crit_{symbol}_{sid}", on_click=_to_criteria, args=(sid,))
+        st.button("How this scan works", icon=":material/arrow_forward:", type="tertiary",
+                  key=f"why_crit_{symbol}_{scan}", on_click=_to_criteria, args=(scan,))
     with levels:
         st.dataframe(pd.DataFrame([{
             "Level": humanize(lv["type"]) + (" (manual)" if lv["manual"] else ""), "Role": humanize(lv["role"]),
@@ -383,54 +364,50 @@ def _evidence_tabs(d: dict, cfg: Config, symbol: str, sid: str) -> None:
         st.caption(f"Sector ETF: {d['sector'] or 'n/a'} · ATR {d['atr']:.2f}")
 
 
-def _setup(res: RunResult, cfg: Config, srow: SymbolRow | None, symbol: str) -> None:
-    if srow is None:
-        st.info(f"No strategies were evaluated for {symbol}.")
+def _setup(res: RunResult, cfg: Config, symbol: str) -> None:
+    rows = ticker_scans(res, symbol)
+    if not rows:
+        st.info(f"No scans were evaluated for {symbol}.")
         return
-    rows = pane_rows(srow)
-    key = f"strat_{symbol}"
-    ids = [r.ev.strategy.id for r in rows]
+    key = f"scan_{symbol}"
+    ids = [r.scan for r in rows]
     if st.session_state.get(key) not in ids:
-        st.session_state[key] = ids[0]
-    by_id = {r.ev.strategy.id: r for r in rows}
+        st.session_state[key] = best_scan(res, symbol)
+    by_id = {r.scan: r for r in rows}
 
     desc = _description(cfg, symbol)
     sa = res.analyses[symbol]
     close = float(sa.bars.close[sa.last_idx])
-    d_group = direction(srow)
-    badge = DIRECTION_BADGE[d_group] if d_group else ":gray-badge[no match]"
+    listed = listed_scans(res, symbol)
+    badges = " ".join(DIRECTION_BADGE[n] for n in listed) or ":gray-badge[not listed]"
     st.markdown(f"### {symbol} <span class='scn-muted'>{desc[0] if desc else ''}</span>",
                 unsafe_allow_html=True, help=card_tooltip(desc))
-    st.markdown(f"{badge} {_setup_summary_md(srow)}",
-                help="Matched setups by direction (score). Every active strategy is evaluated; pick one below "
-                     "to see its rules.")
-    st.markdown(f"**{close:,.2f}** {_pct_md(change_pct(sa), scale=1, nd=2)} · RSI "
+    st.markdown(f"{badges} **{close:,.2f}** {_pct_md(change_pct(sa), scale=1, nd=2)} · RSI "
                 f"{float(sa.bars.rsi[sa.last_idx]):.1f} · ATR {float(sa.bars.atr[sa.last_idx]):.2f}"
-                + (f" · sector {sa.sector_etf}" if sa.sector_etf else ""))
-    # one chart per symbol, above the strategy pills: switching strategy re-renders only what follows.
+                + (f" · sector {sa.sector_etf}" if sa.sector_etf else ""),
+                help="Badges: the scans that list this ticker. Every scan is evaluated; pick one below to see its "
+                     "criteria.")
+    # one chart per symbol, above the scan pills: switching scan re-renders only what follows.
     # Overlays (sector ETF, benchmark, ratio) toggle inside the chart, so they never rerun the app either.
     charts = st.session_state.setdefault("charts", {})
     if symbol not in charts:
         charts[symbol] = symbol_chart(res, symbol)
     st.plotly_chart(charts[symbol], width="stretch", theme="streamlit", key=f"chart_{symbol}",
                     config={"displaylogo": False})
-    st.pills("Strategy", ids, key=key, format_func=lambda s: _strategy_label(by_id[s]),
-             label_visibility="collapsed", required=True, wrap=True)
-    sid = st.session_state.get(key) or ids[0]
-    d = detail_view(res, cfg, symbol, sid)
-    row, stg = d["row"], d["strategy"]
-
     with st.container(horizontal=True, vertical_alignment="center"):
-        st.markdown(f"**{stg.name}** · {humanize(stg.bias)}" + (f"  \n{stg.description}" if stg.description else ""),
-                    width="stretch")
-        st.button("Criteria", icon=":material/rule:", type="tertiary", key=f"crit_{symbol}_{sid}",
-                  on_click=_to_criteria, args=(sid,), help="How this strategy is scanned")
+        st.pills("Scan", ids, key=key, format_func=lambda s: _scan_label(by_id[s]), label_visibility="collapsed",
+                 required=True, width="stretch")
+        scan = st.session_state.get(key) or ids[0]
+        st.button("Criteria", icon=":material/rule:", type="tertiary", key=f"crit_{symbol}_{scan}",
+                  on_click=_to_criteria, args=(scan,), help="How this scan works")
+    d = detail_view(res, symbol, scan)
+    r: ScanResult = d["result"]
 
     m = st.columns(4)
-    m[0].metric("Score", f"{row.cand.score:.1f}" if row.cand else "—", border=True,
-                help="Candidate score (0–100) for this strategy." if row.cand
-                else "No full match, so no candidate score.")
-    m[1].metric("Rules met", f"{row.met}/{row.total}", border=True)
+    m[0].metric("Match", f"{r.pct:.0f}%", border=True,
+                help=f"Weighted % of the {scan} scan's criteria met; listed at {r.min_pct:g}% or more."
+                     + (f" {r.pending_pct:.0f}% more is pending the close." if r.pending_pct else ""))
+    m[1].metric("Criteria met", f"{r.met}/{r.total}", border=True)
     m[2].metric("Trend", trend_text(d["trend"]), border=True)
     m[3].metric("Flow", humanize(d["flow_label"]), border=True)
 
@@ -439,27 +416,29 @@ def _setup(res: RunResult, cfg: Config, srow: SymbolRow | None, symbol: str) -> 
         _rules(d)
     with right:
         _ladder(d)
-    _evidence_tabs(d, cfg, symbol, sid)
+    _evidence_tabs(d, cfg, symbol, scan)
 
 
 def _results() -> None:
     res: RunResult | None = st.session_state.get("res")
     cfg: Config | None = st.session_state.get("cfg")
     if res is None or cfg is None:
-        st.info("Pick a session date above and press **Run analysis**. Every run scans all enabled symbols and "
-                "active strategies; filtering happens afterwards.", icon=":material/play_circle:")
+        st.info("Pick a session date above and press **Run analysis**. Every run evaluates all enabled symbols in "
+                "every enabled scan; filtering happens afterwards.", icon=":material/play_circle:")
         return
-    rankings = symbol_rankings(res)  # once per rerun: the overview, the list and the pane all use it
-    ov = overview(res, cfg, rankings)
+    if not res.scans:
+        st.warning("No scan is enabled with criteria. Add criteria in the **Criteria** tab.")
+        return
+    ov = overview(res, cfg)
     _apply_table_pick("watch_table", _watch_rows(ov)[1])
     _overview(ov)
 
-    f = _filters(res, cfg)
-    groups = direction_groups(res, f["symbols"], f["strategy_ids"], f["sectors"], rankings)
+    f = _filters(res)
+    groups = scan_lists(res, f["symbols"], f["sectors"])
     left, right = st.columns([5, 7], gap="large")
     with left, st.container(key="opps_list"):
         group = _direction_pick(groups)
-        data, picks = _list_rows(groups[group], group)
+        data, picks = _list_rows(res, groups[group])
         key = _table_key(f, group)
         if group != st.session_state.get("shown_group", group):  # switched group: open its top ticker
             if picks:
@@ -476,7 +455,7 @@ def _results() -> None:
         _opportunity_table(data, picks, group, key, selected)
     with right:
         if selected:
-            _setup(res, cfg, next((r for r in rankings if r.symbol == selected), None), selected)
+            _setup(res, cfg, selected)
     st.caption(DISCLAIMER)
 
 
@@ -495,57 +474,65 @@ def _flash(key: str) -> None:
             st.warning("\n".join(f"- {w}" for w in warnings))
 
 
-def _after_strategy_save(text: str, issues: list) -> None:
+def _after_scan_save(text: str, issues: list) -> None:
     _clear_results()
-    st.session_state["strategy_rev"] = st.session_state.get("strategy_rev", 0) + 1  # re-seed the edit widgets
-    st.session_state["strategy_saved"] = (text, [str(i) for i in issues])
+    st.session_state["scans_rev"] = st.session_state.get("scans_rev", 0) + 1  # re-seed the edit widgets
+    st.session_state["scans_saved"] = (text, [str(i) for i in issues])
     st.rerun()
 
 
-def _restore_defaults(modified: dict[str, str]) -> None:
-    has_default = (CONFIG_DIR / DEFAULT_STRATEGIES).exists()
+def _restore_defaults(modified: list[str]) -> None:
+    has_default = (CONFIG_DIR / DEFAULT_SCANS).exists()
     with st.popover("Restore defaults", icon=":material/restore:", disabled=not has_default,
-                    help=None if has_default else f"`{DEFAULT_STRATEGIES}` not found in the config directory."):
-        changed = ", ".join(f"`{sid}`" for sid in modified) or "none"
-        st.markdown(f"Replace `{STRATEGIES}` with the preserved original `{DEFAULT_STRATEGIES}`. Strategies that "
-                    f"differ from it: {changed}.")
-        if st.button("Restore all strategies", type="primary"):
-            issues = restore_default_strategies(CONFIG_DIR)
+                    help=None if has_default else f"`{DEFAULT_SCANS}` not found in the config directory."):
+        changed = ", ".join(f"`{n}`" for n in modified) or "none"
+        st.markdown(f"Replace `{SCANS}` with the preserved original `{DEFAULT_SCANS}`. Scans that differ from it: "
+                    f"{changed}.")
+        if st.button("Restore all scans", type="primary"):
+            issues = restore_default_scans(CONFIG_DIR)
             if not show_errors("Not restored:", issues):
-                _after_strategy_save("Strategies restored to defaults. Previous results were cleared.", issues)
+                _after_scan_save("Scans restored to defaults. Previous results were cleared.", issues)
 
 
-def _strategy_editor(stg: Strategy) -> None:
-    rev = st.session_state.get("strategy_rev", 0)
-    vals = technical_values(stg)
-    with st.expander("Edit rules", icon=":material/edit:"), st.form(f"edit_{stg.id}_{rev}", border=False):
-        enabled = st.toggle("Enabled", value=stg.enabled)
-        trend = st.multiselect("trend", TREND_CHOICES, default=vals["trend"],
-                               help="Allowed trend states. `any` cannot be combined with others; empty means any.")
-        signals_all = st.multiselect("signals_all", SIGNAL_NAMES, default=vals["signals_all"],
-                                     help="Every listed signal must fire.")
-        signals_any = st.multiselect("signals_any", SIGNAL_NAMES, default=vals["signals_any"],
-                                     help="At least one listed signal must fire. Empty: no requirement.")
-        c1, c2 = st.columns(2)
-        not_extended = c1.selectbox("not_extended", NOT_EXTENDED_CHOICES,
-                                    index=NOT_EXTENDED_CHOICES.index(vals["not_extended"]),
-                                    help="`auto` follows the bias: bullish → up, bearish → down, others → none.")
-        alignment = c2.selectbox("alignment", ALIGNMENT_CHOICES, index=ALIGNMENT_CHOICES.index(vals["alignment"]),
-                                 help="`soft` labels and scores, `required` drops countertrend, `ignore` skips.")
+def _scan_editor(name: str, scan: Scan) -> None:
+    rev = st.session_state.get("scans_rev", 0)
+    with st.expander("Edit criteria", icon=":material/edit:"), st.form(f"edit_{name}_{rev}", border=False):
+        c1, c2, c3 = st.columns(3)
+        enabled = c1.toggle("Enabled", value=scan.enabled)
+        min_pct = c2.number_input("Minimum match %", min_value=0.0, max_value=100.0, value=float(scan.min_pct),
+                                  step=5.0, help="A ticker is listed when the weighted % of criteria met reaches "
+                                                 "this.")
+        lookback = c3.number_input("Lookback (bars)", min_value=1, max_value=MAX_LOOKBACK_BARS,
+                                   value=int(scan.lookback_bars), step=1,
+                                   help="A signal on any of the latest this-many bars counts (5 ≈ one week). A "
+                                        "criterion's Within overrides it.")
+        df = pd.DataFrame(criterion_rows(scan), columns=CRITERION_COLUMNS).astype({"weight": float,
+                                                                                   "within": "Int64"})
+        rows = st.data_editor(
+            df, num_rows="dynamic", hide_index=True, width="stretch", key=f"criteria_{name}_{rev}",
+            column_config={
+                "check": st.column_config.SelectboxColumn("Check", options=CHECK_CHOICES, required=True),
+                "value": st.column_config.TextColumn("Value", help=VALUE_HELP, required=True),
+                "weight": st.column_config.NumberColumn("Weight", min_value=0.1, step=0.5, default=1.0,
+                                                        format="%g", help="Blank = 1."),
+                "within": st.column_config.NumberColumn("Within", min_value=1, max_value=MAX_LOOKBACK_BARS, step=1,
+                                                        format="%d", help="Signal checks only: bars to look back "
+                                                                          "over. Blank = the scan's lookback."),
+                "label": st.column_config.TextColumn("Label", help="Optional; a readable name is generated."),
+            })
+        st.caption(f"Value: {VALUE_HELP}. Signals: {', '.join(f'`{n}`' for n in SIGNAL_NAMES)}.")
         if st.form_submit_button("Save", type="primary"):
-            new = {"trend": trend, "signals_all": signals_all, "signals_any": signals_any,
-                   "not_extended": not_extended, "alignment": alignment}
-            issues = save_strategy(CONFIG_DIR, stg.id, new, enabled)
+            issues = save_scan(CONFIG_DIR, name, enabled, min_pct, rows.to_dict("records"), int(lookback))
             if not show_errors("Not saved:", issues):
-                _after_strategy_save(f"Saved {stg.name}. Previous results were cleared; run the analysis again.",
-                                     issues)
+                _after_scan_save(f"Saved the {name} scan. Previous results were cleared; run the analysis again.",
+                                 issues)
 
 
 def _criteria_logic(c) -> None:
-    """The full rule-by-rule logic of one strategy, with its signal parameters merged into one table."""
+    """The full criterion-by-criterion logic of one scan, with its signal parameters merged into one table."""
     params: dict[str, object] = {}
     for n, rule in enumerate(c.rules, 1):
-        st.markdown(f"**{n}. {humanize(rule.rule)}** (`{rule.rule}`): {rule.summary}")
+        st.markdown(f"**{n}. {rule.label}** (`{rule.check}`, weight {rule.weight:g}): {rule.summary}")
         lines = list(rule.details) + [f"**`{sig.name}`** ({sig.kind}, {sig.direction}): {sig.description}"
                                       for sig in rule.signals]
         if lines:
@@ -553,7 +540,7 @@ def _criteria_logic(c) -> None:
         for sig in rule.signals:
             params.update(dict(sig.params))
         if rule.table:
-            st.dataframe(pd.DataFrame(rule.table, columns=["Bias", "Agree", "Oppose"]), hide_index=True)
+            st.dataframe(pd.DataFrame(rule.table, columns=["Scan", "Agree", "Oppose"]), hide_index=True)
     if params:
         st.markdown("**Signal parameters**")
         st.dataframe(pd.DataFrame([{"Parameter": p, "Value": str(v)} for p, v in params.items()]), hide_index=True)
@@ -563,45 +550,38 @@ def _criteria_logic(c) -> None:
 
 
 def _criteria(cfg: Config) -> None:
-    st.caption("What the scanner checks for each strategy, built from `strategies.yaml` and `settings.yaml` "
-               "(per-strategy overrides applied). **Edit rules** rewrites only that strategy's lines.")
-    _flash("strategy_saved")
-    modified = modified_strategies(cfg)
-    crits = strategy_criteria(cfg)
-    ids = ["all"] + [c.strategy.id for c in crits]
+    st.caption("What each scan checks, built from `scans.yaml` and `settings.yaml`. **Edit criteria** validates "
+               "and rewrites `scans.yaml`.")
+    _flash("scans_saved")
+    modified = modified_scans(cfg)
+    crits = scan_criteria(cfg)
+    ids = ["all"] + [c.name for c in crits]
     if st.session_state.get("criteria_focus") not in ids:
         st.session_state["criteria_focus"] = "all"
     with st.container(horizontal=True, vertical_alignment="bottom", gap="medium"):
-        focus = st.selectbox("Strategy", ids, key="criteria_focus", width=320,
-                             format_func=lambda s: "All strategies" if s == "all" else _name(cfg, s))
-        show_inactive = st.toggle("Show inactive strategies", value=False)
+        focus = st.selectbox("Scan", ids, key="criteria_focus", width=240,
+                             format_func=lambda s: "All scans" if s == "all" else _scan_title(s))
         _restore_defaults(modified)
     with st.expander("Shared definitions"):
         for term, text in global_criteria(cfg):
             st.markdown(f"**{term}**: {text}")
     for c in crits:
-        stg = c.strategy
-        if focus != "all" and stg.id != focus:
-            continue
-        if focus == "all" and not c.active and not show_inactive:
+        if focus != "all" and c.name != focus:
             continue
         with st.container(border=True):
             badge = "" if c.active else " :gray-badge[inactive]"
-            if stg.id in modified:
-                badge += f" :orange-badge[{modified[stg.id]}]"
-            st.markdown(f"#### {stg.name}{badge}")
-            st.caption(f"`{stg.id}` · {humanize(stg.bias)}"
-                       + (f" · {stg.description}" if stg.description else ""))
+            if c.name in modified:
+                badge += " :orange-badge[modified]"
+            st.markdown(f"#### {_scan_title(c.name)}{badge}")
             if c.rules:
-                st.markdown("  ·  ".join(f"**{term}** {value}" for term, value in strategy_recipe(stg)))
-            else:
-                st.caption("No technical rules: the scanner does not evaluate this strategy.")
-            if c.overrides:
-                st.caption("Overrides: " + ", ".join(f"`{k}` = {v}" for k, v in c.overrides.items()))
-            if c.rules:
-                with st.expander("Show logic", icon=":material/account_tree:", expanded=focus == stg.id):
+                st.caption(f"Listed at **{c.scan.min_pct:g}%** match or more · signals count on the latest "
+                           f"**{c.scan.lookback_bars}** bars")
+                st.markdown("  ·  ".join(scan_recipe(c.scan)))
+                with st.expander("Show logic", icon=":material/account_tree:", expanded=focus == c.name):
                     _criteria_logic(c)
-            _strategy_editor(stg)
+            else:
+                st.caption("No criteria: this scan is not evaluated.")
+            _scan_editor(c.name, c.scan)
 
 
 # ----------------------------------------------------------------------------------------------

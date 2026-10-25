@@ -14,6 +14,7 @@ import numpy as np
 
 from scanner.models import Bars, Level, Pivot
 
+BREAK_BARS = 2  # a break is two closes beyond a level, so a line is not invalidated by its own break
 
 def recency(bars_since: int, half_life: float) -> float:
     return float(0.5 ** (max(bars_since, 0) / half_life)) if half_life > 0 else 1.0
@@ -70,8 +71,12 @@ def horizontal_levels(bars: Bars, highs: list[Pivot], lows: list[Pivot], cutoff:
 
 
 def _line(y_a: float, i_a: int, y_b: float, i_b: int, n: int, log: bool) -> np.ndarray:
-    slope = (y_b - y_a) / (i_b - i_a)
-    y = y_a + slope * (np.arange(n) - i_a)
+    return _line_at(y_a, i_a, (y_b - y_a) / (i_b - i_a), np.arange(n), log)
+
+
+def _line_at(y_a: float, i_a: int, slope: float, t, log: bool):
+    """The line's value at bar(s) t (same arithmetic as `_line`, so values match it exactly)."""
+    y = y_a + slope * (t - i_a)
     return np.exp(y) if log else y
 
 
@@ -79,57 +84,67 @@ def trendlines(bars: Bars, highs: list[Pivot], lows: list[Pivot], cutoff: int, s
     """Best pivot-pair lines per side (OQ-5 / TE-11).
 
     Candidate = any pair of confirmed same-side pivots within the lookback. A candidate is discarded if any
-    close from its first anchor up to `cutoff − max_signal_age_bars − 1` is beyond its zone (closes through
-    the line between anchors, or since the second anchor). Excluding the most recent bars keeps a line
-    alive on the bar(s) whose break is the current signal. Touches = same-side pivots inside the zone.
+    close from its first anchor up to `cutoff − BREAK_BARS` is beyond its zone (closes through the line
+    between anchors, or since the second anchor). Excluding the two most recent bars keeps a line alive on
+    the bars of a 2-bar break that is the current signal. Touches = same-side pivots inside the zone.
     """
     ls, k = settings.levels, settings.levels.zone_atr_mult
     log = ls.trendline_scale == "log"
     n = len(bars)
-    inv_end = cutoff - settings.signals.max_signal_age_bars - 1
+    inv_end = cutoff - BREAK_BARS
     close, atr = bars.close, bars.atr
+    bar_idx = np.arange(n)
     out: list[Level] = []
     for origin, pivots, tag in (("support", lows, "sup"), ("resistance", highs, "res")):
         piv = _usable(pivots, cutoff, ls.trendline_lookback_bars)
+        p_idx = np.array([p.idx for p in piv], dtype=int)
+        p_price = np.array([p.price for p in piv], dtype=float)
+        with np.errstate(invalid="ignore"):
+            p_tol = k * atr[p_idx] + 1e-12
         cands = []
         for a, b in combinations(piv, 2):
             if log and (a.price <= 0 or b.price <= 0):
                 continue
             ya, yb = (np.log(a.price), np.log(b.price)) if log else (a.price, b.price)
-            vals = _line(ya, a.idx, yb, b.idx, n, log)
-            if not vals[cutoff] > 0:
+            line = (ya, a.idx, (yb - ya) / (b.idx - a.idx))  # values only where needed; full array if kept
+            if not _line_at(*line, cutoff, log) > 0:
                 continue
             seg = slice(a.idx + 1, inv_end + 1)
+            vals = _line_at(*line, bar_idx[seg], log)
             with np.errstate(invalid="ignore"):
                 if origin == "support":
-                    bad = close[seg] < vals[seg] - k * atr[seg]
+                    bad = close[seg] < vals - k * atr[seg]
                 else:
-                    bad = close[seg] > vals[seg] + k * atr[seg]
+                    bad = close[seg] > vals + k * atr[seg]
             if np.any(bad):
                 continue
-            touches = [p for p in piv if abs(p.price - vals[p.idx]) <= k * atr[p.idx] + 1e-12]
+            with np.errstate(invalid="ignore"):
+                hit = np.abs(p_price - _line_at(*line, p_idx, log)) <= p_tol
+            touches = [piv[j] for j in np.flatnonzero(hit)]
             if len(touches) < ls.min_touches_diagonal:
                 continue
             last = max(p.idx for p in touches)
             q = len(touches) * recency(cutoff - last, ls.recency_half_life_bars)
-            cands.append((q, b.idx, a.idx, a, b, vals, touches))
+            cands.append((q, b.idx, a.idx, a, b, line, touches))
         cands.sort(key=lambda c: (-c[0], -c[1], -c[2]))
         kept: list[tuple] = []
         for c in cands:
-            vals, a = c[5], c[3]
+            line, a = c[5], c[3]
             dup = False
             for kc in kept:
-                kv = kc[5]
+                kl = kc[5]
                 i0 = min(a.idx, kc[3].idx)
-                if (abs(vals[cutoff] - kv[cutoff]) <= 2 * k * atr[cutoff]
-                        and abs(vals[i0] - kv[i0]) <= 2 * k * (atr[i0] if not np.isnan(atr[i0]) else atr[cutoff])):
+                if (abs(_line_at(*line, cutoff, log) - _line_at(*kl, cutoff, log)) <= 2 * k * atr[cutoff]
+                        and abs(_line_at(*line, i0, log) - _line_at(*kl, i0, log))
+                        <= 2 * k * (atr[i0] if not np.isnan(atr[i0]) else atr[cutoff])):
                     dup = True
                     break
             if not dup:
                 kept.append(c)
             if len(kept) >= ls.max_trendlines_per_side:
                 break
-        for m, (q, _, _, a, b, vals, touches) in enumerate(kept, start=1):
+        for m, (q, _, _, a, b, line, touches) in enumerate(kept, start=1):
+            vals = _line_at(*line, bar_idx, log)
             ts = sorted(touches, key=lambda p: p.idx)
             out.append(Level(
                 id=f"d_{tag}_{m}", type="diagonal", values=vals, origin=origin, touches=len(touches),

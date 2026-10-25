@@ -16,6 +16,20 @@ def test_every_signal_is_documented():
         assert f"`{name}`" in doc, f"{name} missing from docs/signals.md"
 
 
+def test_no_options_strategy_vocabulary():
+    """The scanner is directional scans only: no options-strategy concepts in code, config or docs."""
+    banned = re.compile(r"strateg|spread|pmcc|pmcp|\bwheel\b|flyagonal|premium|debit|"
+                        r"ted_calendar|neutral_calendar", re.IGNORECASE)
+    # the migration error for a leftover strategies.yaml, and the build backend's wheel target
+    allowed = re.compile(r"strategies(\.default)?\.yaml|_STRATEGIES_GONE|tool\.hatch")
+    paths = [*(ROOT / "src" / "scanner").rglob("*.py"), *(ROOT / "config").glob("*.yaml"),
+             *(ROOT / "docs").glob("*.md"), ROOT / "README.md", ROOT / "pyproject.toml"]
+    hits = [f"{p.relative_to(ROOT)}:{n}: {ln.strip()}" for p in paths
+            for n, ln in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+            if banned.search(ln) and not allowed.search(ln)]
+    assert not hits, "\n".join(hits)
+
+
 def test_no_out_of_scope_data_paths():
     """Acceptance #9: no code path touches ORATS, option chains, fundamentals, earnings or macro data.
 

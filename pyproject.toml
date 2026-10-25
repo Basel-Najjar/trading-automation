@@ -1,7 +1,7 @@
 [project]
 name = "trading-automation"
 version = "0.1.0"
-description = "Technical Opportunity Scanner: a Streamlit app mapping daily-bar technical setups to options strategies"
+description = "Technical Opportunity Scanner: a Streamlit app ranking daily-bar technical setups in bullish, bearish and neutral scans"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

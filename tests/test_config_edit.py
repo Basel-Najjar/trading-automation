@@ -10,19 +10,20 @@ import pytest
 from conftest import ROOT
 from scanner.config import load_config
 from scanner.config_edit import (
-    ALIGNMENT_CHOICES,
-    DEFAULT_STRATEGIES,
-    NOT_EXTENDED_CHOICES,
-    STRATEGIES,
-    modified_strategies,
-    restore_default_strategies,
+    CHECK_CHOICES,
+    DEFAULT_SCANS,
+    FLOW_CHOICES,
+    SCANS,
+    criterion_rows,
+    modified_scans,
+    restore_default_scans,
     save_edits,
-    save_strategy,
-    set_strategy_text,
-    technical_values,
+    save_scan,
+    scans_text,
     universe_table,
     validate_edits,
 )
+from scanner.models import CHECKS
 
 
 @pytest.fixture
@@ -39,7 +40,7 @@ def _cfg(d: Path):
 
 
 def _files(d: Path) -> dict[str, str]:
-    return {n: (d / n).read_text(encoding="utf-8") for n in ("universe.csv", "settings.yaml", STRATEGIES)}
+    return {n: (d / n).read_text(encoding="utf-8") for n in ("universe.csv", "settings.yaml", SCANS)}
 
 
 # ----------------------------------------------------------------------------------------------
@@ -49,7 +50,8 @@ def _files(d: Path) -> dict[str, str]:
 
 def test_sample_config_has_no_legacy_symbol_files():
     assert not (ROOT / "config" / "sector_map.csv").exists() and not (ROOT / "config" / "universe.txt").exists()
-    assert (ROOT / "config" / DEFAULT_STRATEGIES).exists()
+    assert (ROOT / "config" / DEFAULT_SCANS).exists()
+    assert not (ROOT / "config" / "strategies.yaml").exists()
 
 
 def test_round_trip_is_byte_identical(csv_config):
@@ -88,89 +90,93 @@ def test_all_disabled_is_an_error(csv_config):
 
 
 # ----------------------------------------------------------------------------------------------
-# strategies.yaml
+# scans.yaml
 # ----------------------------------------------------------------------------------------------
 
 
-def test_dropdown_options_match_model():
-    assert NOT_EXTENDED_CHOICES == ["auto", "none", "up", "down"]
-    assert ALIGNMENT_CHOICES == ["soft", "required", "ignore"]
+def _errors(issues) -> list[str]:
+    return [str(i) for i in issues if i.severity == "error"]
+
+
+def test_choices_match_model():
+    assert CHECK_CHOICES == list(CHECKS)
+    assert FLOW_CHOICES == ["with_flow", "not_countertrend"]
+
+
+def test_default_file_is_in_canonical_layout():
+    cfg = _cfg(ROOT / "config")
+    assert scans_text(cfg.scans) == (ROOT / "config" / DEFAULT_SCANS).read_text(encoding="utf-8")
 
 
 def test_unchanged_save_is_byte_identical(config_dir):
     before = _files(config_dir)
-    for s in _cfg(config_dir).strategies:
-        if not s.technical.is_empty:
-            issues = save_strategy(config_dir, s.id, technical_values(s), s.enabled)
-            assert not [i for i in issues if i.severity == "error"], (s.id, [str(i) for i in issues])
+    for name, sc in _cfg(config_dir).scans.items():
+        assert not _errors(save_scan(config_dir, name, sc.enabled, sc.min_pct, criterion_rows(sc))), name
     assert _files(config_dir) == before
 
 
-def test_edit_touches_only_that_strategy(config_dir):
-    p = config_dir / STRATEGIES
-    before = p.read_text(encoding="utf-8").splitlines()
-    new = {"trend": ["uptrend", "range"], "signals_all": [], "signals_any": ["support_hold", "bullish_engulfing"],
-           "not_extended": "up", "alignment": "required"}
-    assert not [i for i in save_strategy(config_dir, "long_stock", new, enabled=False) if i.severity == "error"]
-    after = p.read_text(encoding="utf-8").splitlines()
-    changed = [(a, b) for a, b in zip(before, after, strict=True) if a != b]
-    assert changed == [
-        ("  enabled: true", "  enabled: false"),
-        ("    trend: [uptrend]", "    trend: [uptrend, range]"),
-        ("    signals_any: [support_hold]", "    signals_any: [support_hold, bullish_engulfing]"),
-        ("    alignment: soft                # owner favors rising relative strength vs sector ETF",
-         "    alignment: required                # owner favors rising relative strength vs sector ETF"),
-    ]
-    st = _cfg(config_dir).strategy("long_stock")
-    assert technical_values(st) == new and st.enabled is False
-    assert modified_strategies(_cfg(config_dir)) == {"long_stock": "modified"}
-
-
-def test_edit_flow_style_technical_and_keeps_overrides(config_dir):
-    p = config_dir / STRATEGIES
-    p.write_text(p.read_text(encoding="utf-8").replace(
-        "    signals_any: [support_hold]\n    not_extended: none\n    alignment: soft\n",
-        "    signals_any: [support_hold]\n    not_extended: none\n    alignment: soft\n"
-        "    overrides: {full_body_ratio: 0.8}  # mine\n", 1), encoding="utf-8")
-    new = {"trend": ["range"], "signals_all": ["range_bound"], "signals_any": [], "not_extended": "none",
-           "alignment": "ignore"}
-    assert not [i for i in save_strategy(config_dir, "flyagonal", new) if i.severity == "error"]
-    assert not [i for i in save_strategy(config_dir, "bull_put_spread", dict(new, trend=["uptrend"]))
-                if i.severity == "error"]
+def test_edit_one_scan(config_dir):
+    rows = [{"check": "trend", "value": "uptrend, range", "weight": None, "label": ""},
+            {"check": "signal_all", "value": "[support_hold resistance_break]", "weight": 3, "label": "Two"},
+            {"check": "rsi_between", "value": "45, 65", "weight": float("nan"), "label": None},
+            {"check": None, "value": None, "weight": None, "label": None}]  # a blank row added in the editor
+    assert not _errors(save_scan(config_dir, "bullish", False, 55, rows))
     cfg = _cfg(config_dir)
-    assert technical_values(cfg.strategy("flyagonal")) == new
-    assert cfg.strategy("bull_put_spread").technical.overrides == {"full_body_ratio": 0.8}
-    assert "overrides: {full_body_ratio: 0.8}  # mine" in p.read_text(encoding="utf-8")
+    sc = cfg.scans["bullish"]
+    assert (sc.enabled, sc.min_pct) == (False, 55)
+    assert [(c.check, c.value, c.weight, c.label) for c in sc.criteria] == [
+        ("trend", ["uptrend", "range"], 1.0, ""), ("signal_all", ["support_hold", "resistance_break"], 3.0, "Two"),
+        ("rsi_between", (45.0, 65.0), 1.0, "")]
+    assert modified_scans(cfg) == ["bullish"]
+    assert "    - {signal_all: [support_hold, resistance_break], weight: 3, label: \"Two\"}\n" in \
+        (config_dir / SCANS).read_text(encoding="utf-8")
 
 
-def test_invalid_edit_writes_nothing(config_dir):
+def test_edit_lookback_within_and_channel(config_dir):
+    rows = [{"check": "channel", "value": "8", "weight": 2, "within": None, "label": ""},
+            {"check": "signal_any", "value": "support_held", "weight": None, "within": 4.0, "label": ""},
+            {"check": "signal_any", "value": "support_hold", "weight": None, "within": float("nan"), "label": ""}]
+    assert not _errors(save_scan(config_dir, "neutral", True, 70, rows, 7))
+    sc = _cfg(config_dir).scans["neutral"]
+    assert sc.lookback_bars == 7 and [(c.check, c.value, c.within) for c in sc.criteria] == [
+        ("channel", 8, None), ("signal_any", ["support_held"], 4), ("signal_any", ["support_hold"], None)]
+    text = (config_dir / SCANS).read_text(encoding="utf-8")
+    assert "  lookback_bars: 7\n" in text and "    - {signal_any: [support_held], within: 4}\n" in text
+    assert [r["within"] for r in criterion_rows(sc)] == [None, 4, None]
+    assert not _errors(save_scan(config_dir, "neutral", True, 70, rows))  # no lookback given: kept
+    assert _cfg(config_dir).scans["neutral"].lookback_bars == 7
+
+
+@pytest.mark.parametrize(("row", "message"), [
+    ({"check": "trend", "value": "sideways"}, "invalid trend state 'sideways'"),
+    ({"check": "rsi_below", "value": "high"}, "cannot read 'high'"),
+    ({"check": "rsi_between", "value": "40"}, "cannot read '40'"),
+    ({"check": "signal_any", "value": "suport_hold"}, "did you mean 'support_hold'"),
+    ({"check": "flow", "value": "aligned"}, "flow"),
+    ({"check": "rsi_above", "value": "30", "weight": "heavy"}, "weight must be a number"),
+    ({"check": "", "value": "uptrend"}, "pick a check"),
+    ({"check": "channel", "value": "2.5"}, "cannot read '2.5'"),
+    ({"check": "channel", "value": "2"}, "channel"),
+    ({"check": "signal_any", "value": "support_hold", "within": "1.5"}, "within must be a whole number"),
+    ({"check": "trend", "value": "uptrend", "within": 3}, "`within` applies only"),
+])
+def test_invalid_edit_writes_nothing(config_dir, row, message):
     before = _files(config_dir)
-    bad = {"trend": ["any", "uptrend"], "signals_all": [], "signals_any": [], "not_extended": "auto",
-           "alignment": "soft"}
-    issues = save_strategy(config_dir, "long_stock", bad)
-    assert any(i.severity == "error" and "'any' cannot be combined" in i.message for i in issues)
+    issues = save_scan(config_dir, "bearish", True, 70, [row])
+    assert any(message in e for e in _errors(issues)), _errors(issues)
     assert _files(config_dir) == before
-
-
-def test_empty_trend_means_any(config_dir):
-    new = {"trend": [], "signals_all": [], "signals_any": ["support_hold"], "not_extended": "none",
-           "alignment": "soft"}
-    save_strategy(config_dir, "long_stock", new)
-    assert _cfg(config_dir).strategy("long_stock").technical.trend == ["any"]
 
 
 def test_restore_defaults(config_dir):
-    original = (config_dir / STRATEGIES).read_text(encoding="utf-8")
-    p = config_dir / STRATEGIES
-    p.write_text(set_strategy_text(original, "wheel", {"trend": ["uptrend"], "signals_all": [], "signals_any": [
-        "support_hold"], "not_extended": "none", "alignment": "soft"}, enabled=False), encoding="utf-8")
-    assert modified_strategies(_cfg(config_dir)) == {"wheel": "modified"}
-    assert not [i for i in restore_default_strategies(config_dir) if i.severity == "error"]
-    assert p.read_text(encoding="utf-8") == original and modified_strategies(_cfg(config_dir)) == {}
+    original = (config_dir / SCANS).read_text(encoding="utf-8")
+    save_scan(config_dir, "neutral", True, 50, [{"check": "trend", "value": "range"}])
+    assert modified_scans(_cfg(config_dir)) == ["neutral"]
+    assert not _errors(restore_default_scans(config_dir))
+    assert (config_dir / SCANS).read_text(encoding="utf-8") == original and modified_scans(_cfg(config_dir)) == []
 
 
 def test_restore_without_default_file(config_dir):
-    (config_dir / DEFAULT_STRATEGIES).unlink()
+    (config_dir / DEFAULT_SCANS).unlink()
     before = _files(config_dir)
-    assert any(i.severity == "error" for i in restore_default_strategies(config_dir))
-    assert _files(config_dir) == before and modified_strategies(_cfg(config_dir)) == {}
+    assert any(i.severity == "error" for i in restore_default_scans(config_dir))
+    assert _files(config_dir) == before and modified_scans(_cfg(config_dir)) == []

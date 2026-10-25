@@ -96,9 +96,9 @@ def config_dir(tmp_path: Path) -> Path:
     """Copy of the sample config with a tiny universe and the cache dir inside tmp_path."""
     d = tmp_path / "config"
     d.mkdir()
-    # tests pin the preserved default playbook, not the owner's working copy (which the app edits)
-    shutil.copyfile(ROOT / "config" / "strategies.default.yaml", d / "strategies.yaml")
-    shutil.copyfile(ROOT / "config" / "strategies.default.yaml", d / "strategies.default.yaml")
+    # tests pin the preserved default scans, not the owner's working copy (which the app edits)
+    shutil.copyfile(ROOT / "config" / "scans.default.yaml", d / "scans.yaml")
+    shutil.copyfile(ROOT / "config" / "scans.default.yaml", d / "scans.default.yaml")
     text = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
     text = text.replace("cache_dir: cache ", f"cache_dir: {(tmp_path / 'cache').as_posix()} ")
     (d / "settings.yaml").write_text(text, encoding="utf-8")

@@ -5,10 +5,20 @@ Hand-built bars use ATR = 2 and zone_atr_mult = 0.25, so a level at 100 has zone
 
 from __future__ import annotations
 
+import numpy as np
+
 from conftest import bars_from_ohlc, hlevel, tech_for
 from scanner.config import Settings
-from scanner.models import SIGNAL_NAMES, TrendResult, Tri
-from scanner.signals import REGISTRY, body_ratio, engulfs, evaluate_signals, is_full_body, near_signals
+from scanner.models import SIGNAL_NAMES, Level, TrendResult, Tri
+from scanner.signals import (
+    REGISTRY,
+    body_ratio,
+    engulfs,
+    evaluate_signals,
+    find_channel,
+    is_full_body,
+    near_signals,
+)
 
 S = Settings()
 ABOVE = (102.0, 102.5, 101.5, 102.0)  # filler bar closing above the zone
@@ -125,9 +135,27 @@ def test_reclaim_of_level_already_beyond_is_not_a_break():
     assert _fire("resistance_break", rows, origin="resistance") == []
 
 
-def test_break_without_engulfing_is_no_signal():
+ENGULF = _with(break_confirm="engulf")
+
+
+def test_break_without_engulfing_is_no_signal_in_engulf_mode():
     rows = BREAK_OK[:-1] + [(100.5, 100.6, 97.9, 98.0)]  # body top 100.5 < prior body top 100.6
+    assert _fire("support_break", rows, settings=ENGULF) == []
+    assert len(_fire("support_break", rows)) == 1  # prior_extreme: both strong, N closes below N-1's low
+
+
+def test_prior_extreme_break_needs_close_beyond_first_bars_extreme():
+    rows = BREAK_OK[:-1] + [(100.6, 100.7, 99.05, 99.1)]  # strong, engulfs, but closes above N-1's low 99.0
     assert _fire("support_break", rows) == []
+    assert len(_fire("support_break", rows, settings=ENGULF)) == 1
+
+
+def test_prior_extreme_break_needs_a_strong_first_bar():
+    weak = [ABOVE] * 12 + [(100.0, 100.8, 99.0, 99.2), BREAK_OK[-1]]  # N-1 body 0.8 / range 1.8
+    assert _fire("support_break", weak) == []
+    assert len(_fire("support_break", weak, settings=ENGULF)) == 1
+    green = [ABOVE] * 12 + [(98.8, 99.4, 98.75, 99.35), (99.3, 99.4, 97.9, 98.0)]  # N-1 full-bodied but bullish
+    assert _fire("support_break", green) == []
 
 
 def test_engulfing_but_not_full_bodied_is_no_signal():
@@ -152,8 +180,9 @@ def test_break_requires_prior_closes_on_level_side():
 
 def test_break_same_colour_engulfing_setting():
     assert BREAK_OK[-2][3] < BREAK_OK[-2][0]  # N-1 bearish, N bearish: same colour
-    assert len(_fire("support_break", BREAK_OK)) == 1  # spec default allows same colour
-    assert _fire("support_break", BREAK_OK, settings=_with(break_engulfing_require_opposite_color=True)) == []
+    assert len(_fire("support_break", BREAK_OK, settings=ENGULF)) == 1  # spec default allows same colour
+    opposite = _with(break_confirm="engulf", break_engulfing_require_opposite_color=True)
+    assert _fire("support_break", BREAK_OK, settings=opposite) == []
 
 
 RES_BREAK = [BELOW] * 12 + [(99.6, 100.9, 99.4, 100.7), (99.5, 102.2, 99.4, 102.0)]
@@ -176,12 +205,114 @@ def test_break_suppresses_opposite_hold_on_same_level():
 def test_near_break_first_close_and_in_zone():
     b = bars_from_ohlc([ABOVE] * 12 + [FIRST_BELOW])
     near = near_signals(tech_for(b, [hlevel(100.0, len(b))]), len(b) - 1, S)["support_break"][0]
-    assert near.distance_atr == 0.0 and "first close below" in near.description
+    assert near.distance_atr == 0.0 and "first strong close below" in near.description
+    assert near.triggers[0].price == 99.0  # the second close must go below this bar's low
+    near = near_signals(tech_for(b, [hlevel(100.0, len(b))]), len(b) - 1, ENGULF)["support_break"][0]
+    assert "first close below" in near.description and near.triggers[0].price == 99.5
+    weak = bars_from_ohlc([ABOVE] * 12 + [(100.0, 100.8, 99.0, 99.2)])
+    assert near_signals(tech_for(weak, [hlevel(100.0, len(weak))]), len(weak) - 1, S).get("support_break") is None
     b = bars_from_ohlc([ABOVE] * 12 + [(101, 101.5, 100.6, 101), (100.8, 101, 100.0, 100.2)])
     near = near_signals(tech_for(b, [hlevel(100.0, len(b))]), len(b) - 1, S)["support_break"][0]
     assert "no break yet" in near.description and near.triggers[0].price == 99.5
     b = bars_from_ohlc(BREAK_OK)  # fired → not a near-miss
     assert near_signals(tech_for(b, [hlevel(100.0, len(b))]), len(b) - 1, S).get("support_break", []) == []
+
+
+# ---------------------------------------------------------------- held (passive) signals
+
+
+HELD_TEST = (102, 102.2, 100.2, 100.8)  # low into the support zone, close above zone_low, prior close above
+RES_TEST = (98, 100.3, 97.8, 99.0)  # high into the resistance zone, close below zone_high, prior close below
+
+
+def _line(n: int, slope: float, end_value: float = 100.0, lid: str = "d_test") -> Level:
+    vals = end_value + slope * (np.arange(n) - (n - 1))
+    return Level(id=lid, type="diagonal", values=vals, origin="support", touches=2, quality=2.0)
+
+
+def _fire_on(name, rows, lv, settings=S):
+    b = bars_from_ohlc(rows)
+    return REGISTRY[name].fn(tech_for(b, [lv]), len(b) - 1, settings)
+
+
+def test_support_held_on_horizontal_level():
+    rows = [ABOVE] * 12 + [HELD_TEST]
+    out = _fire("support_held", rows)
+    assert len(out) == 1 and out[0][1]["held_side"] == "support" and out[0][1]["slope"] == "flat"
+    assert _fire("support_held", [ABOVE] * 12 + [(102, 102.2, 98.5, 99.0)]) == []  # closed through the zone
+    assert _fire("support_held", [ABOVE] * 13) == []  # never tested
+    assert _fire("resistance_held", rows) == []
+    assert len(_fire("resistance_held", [BELOW] * 12 + [RES_TEST], origin="resistance")) == 1
+
+
+def test_slope_decides_rising_or_falling_whatever_the_role():
+    n = 13
+    above, below = [ABOVE] * 12 + [HELD_TEST], [BELOW] * 12 + [RES_TEST]
+    rising, falling = _line(n, 0.1), _line(n, -0.1)
+    for rows, side in ((above, "support"), (below, "resistance")):
+        out = _fire_on("rising_line_held", rows, rising)
+        assert len(out) == 1 and out[0][1]["held_side"] == side and out[0][1]["slope"] == "rising"
+        assert _fire_on("falling_line_held", rows, rising) == []
+        assert len(_fire_on("falling_line_held", rows, falling)) == 1
+        assert _fire_on("rising_line_held", rows, falling) == []
+    # sloped lines are never horizontal support/resistance
+    assert _fire_on("support_held", above, rising) == [] and _fire_on("resistance_held", below, falling) == []
+
+
+def test_held_level_must_predate_the_test():
+    rows = [ABOVE] * 12 + [HELD_TEST]
+    b = bars_from_ohlc(rows)
+    lv = hlevel(100.0, len(b))
+    lv.anchors = [(b.dates[3], 100.1), (b.dates[-1], 100.2)]  # one touch before the test: not a level yet
+    assert REGISTRY["support_held"].fn(tech_for(b, [lv]), len(b) - 1, S) == []
+    lv.anchors = [(b.dates[3], 100.1), (b.dates[6], 99.9), (b.dates[-1], 100.2)]
+    assert len(REGISTRY["support_held"].fn(tech_for(b, [lv]), len(b) - 1, S)) == 1
+
+
+def _held_after(after):
+    rows = [ABOVE] * 12 + [HELD_TEST] + after
+    b = bars_from_ohlc(rows)
+    lv, n = hlevel(100.0, len(b)), len(b) - 1
+    return [x for x in evaluate_signals([tech_for(b, [lv], n - a) for a in range(len(after) + 1)], n, S)
+            if x.name == "support_held"]
+
+
+def test_held_needs_every_later_close_on_its_side():
+    held = _held_after([ABOVE, ABOVE])
+    assert [(x.age, x.status) for x in held] == [(2, Tri.TRUE)]
+    assert _held_after([ABOVE, (101, 101, 98.5, 99.0)]) == []  # a later close below the zone ends the hold
+    assert [x.age for x in _held_after([HELD_TEST, ABOVE])] == [1]  # only the latest test of a level is kept
+    # a later bar undercutting the test's low (without closing through the zone) replaces it as the swing-low test
+    assert [(x.age, x.bar_idx) for x in _held_after([(100.2, 100.3, 99.9, 99.95), ABOVE])] == [(1, 13)]
+
+
+def test_held_test_must_be_a_pullback_low():
+    dip = (101, 101.2, 100.0, 100.4)  # an earlier, lower low within the swing window
+    assert _fire("support_held", [ABOVE] * 9 + [dip, ABOVE, ABOVE, HELD_TEST]) == []  # 100.2 is not the 5-bar low
+    assert len(_fire("support_held", [ABOVE] * 9 + [dip, ABOVE, ABOVE, HELD_TEST],
+                     settings=_with(held_swing_bars=2))) == 1
+
+
+def _channel_rows(n=10):
+    touch_sup, touch_res, mid = (101, 103, 100.2, 102.5), (108, 109.8, 107.5, 108.5), (105, 106, 104, 105)
+    return [mid] * 5 + [(touch_sup, mid, touch_res, mid)[t % 4] for t in range(n)]
+
+
+def test_find_channel_horizontal_only():
+    b = bars_from_ohlc(_channel_rows())
+    end = len(b) - 1
+    sup, res = hlevel(100, len(b), "support", "h_sup"), hlevel(110, len(b), "resistance", "h_res")
+    ch = find_channel(tech_for(b, [sup, res]), end - 9, end, S)
+    assert ch["support"] is sup and ch["resistance"] is res and ch["bars"] == 10
+    assert ch["support_touches"] == 3 and ch["resistance_touches"] == 2 and ch["width_atr"] == 5.0
+    assert find_channel(tech_for(b, [sup, res]), end - 9, end, S.model_copy(
+        update={"range": S.range.model_copy(update={"channel_min_touches": 3})})) is None
+    assert find_channel(tech_for(b, [sup]), end - 9, end, S) is None  # no resistance
+    assert find_channel(tech_for(b, [_line(len(b), 0.0001, 100), res]), end - 9, end, S) is None  # sloped support
+    rows = _channel_rows()
+    rows[-3] = (108, 111.5, 107.5, 111.0)  # one close above the resistance zone
+    b = bars_from_ohlc(rows)
+    assert find_channel(tech_for(b, [sup, res]), end - 9, end, S) is None
 
 
 # ---------------------------------------------------------------- patterns

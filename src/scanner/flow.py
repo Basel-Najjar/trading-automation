@@ -1,7 +1,7 @@
 """Relative strength and flow alignment (§6.5).
 
 Ratio series (sector/SPY, name/sector) use the ratio of closes for highs, lows and closes (RS-4 / OQ-8);
-ATR on a ratio is therefore Wilder's average of |Δratio|. Flow agreement per bias comes from
+ATR on a ratio is therefore Wilder's average of |Δratio|. Flow agreement per scan direction comes from
 settings.flow (decision B2): `mixed`/`n/a` components are neutral; countertrend if opposing components
 outnumber agreeing ones; with_flow if none oppose and at least one agrees; otherwise mixed.
 """
@@ -37,9 +37,9 @@ def period_returns(close: pd.Series) -> dict[str, float | None]:
     return out
 
 
-def classify_flow(bias: str, components: list[str], settings) -> str:
-    agree = set(settings.flow.agree.get(bias, []))
-    oppose = set(settings.flow.oppose.get(bias, []))
+def classify_flow(direction: str, components: list[str], settings) -> str:
+    agree = set(settings.flow.agree.get(direction, []))
+    oppose = set(settings.flow.oppose.get(direction, []))
     a = sum(1 for c in components if c in agree)
     o = sum(1 for c in components if c in oppose)
     if o > a:

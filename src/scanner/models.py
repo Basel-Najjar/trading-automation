@@ -14,6 +14,10 @@ import numpy as np
 SIGNAL_NAMES: tuple[str, ...] = (
     "support_hold",
     "resistance_hold",
+    "support_held",
+    "resistance_held",
+    "rising_line_held",
+    "falling_line_held",
     "support_break",
     "resistance_break",
     "bullish_engulfing",
@@ -26,9 +30,12 @@ SIGNAL_NAMES: tuple[str, ...] = (
     "extended_down",
 )
 TREND_STATES: tuple[str, ...] = ("uptrend", "downtrend", "range", "mixed")
-BIASES: tuple[str, ...] = ("bullish", "bearish", "non_bearish", "non_bullish", "neutral")
-UP_BIASES: tuple[str, ...] = ("bullish", "non_bearish")
-DOWN_BIASES: tuple[str, ...] = ("bearish", "non_bullish")
+# the five scans, in display order (most bullish to most bearish)
+DIRECTIONS: tuple[str, ...] = ("bullish", "non_bearish", "neutral", "non_bullish", "bearish")
+CHECKS: tuple[str, ...] = ("trend", "signal_all", "signal_any", "rsi_below", "rsi_above", "rsi_between", "flow",
+                           "channel")
+MAX_LOOKBACK_BARS = 30  # cap on a scan's lookback, a criterion's `within` and `channel` (each bar rebuilds structure)
+FLAT_LEVEL_TYPES = ("horizontal",)  # level types that count as horizontal; every other level is rising or falling
 NA = "n/a"
 
 
@@ -129,10 +136,27 @@ class Level:
     def role(self, t: int, close: float) -> str:
         return "support" if close >= self.value(t) else "resistance"
 
+    def slope_dir(self, t: int) -> str:
+        """flat for horizontal levels; otherwise rising or falling by the line's change into bar t."""
+        if self.type in FLAT_LEVEL_TYPES:
+            return "flat"
+        d = self.value(t) - self.value(t - 1)
+        if np.isnan(d) or d == 0:
+            return "flat"
+        return "rising" if d > 0 else "falling"
+
     @property
     def label(self) -> str:
         tag = " (manual)" if self.manual else ""
         return f"{self.type}{tag}"
+
+    def known_before(self, d: date, min_touches: int) -> bool:
+        """The level existed before date `d`: drawn from enough anchors dated before it (SMAs and anchorless levels
+        always did). Stops a pivot made by a test of the level from proving that the level held."""
+        if not self.anchors:
+            return True
+        early = sum(1 for a, _ in self.anchors if a < d)
+        return early >= (2 if self.type == "diagonal" else min_touches)
 
 
 @dataclass
@@ -149,7 +173,7 @@ class SignalResult:
     age: int
     bar_idx: int
     date: date
-    kind: str  # break | hold | pattern | context
+    kind: str  # break | hold | held | pattern | context
     direction: str  # bullish | bearish | neutral
     level: Level | None = None
     evidence: dict[str, Any] = field(default_factory=dict)
@@ -170,14 +194,6 @@ class NearResult:
     description: str
     distance_atr: float
     triggers: list[AlertPrice]
-
-
-@dataclass
-class RuleResult:
-    rule: str
-    status: Tri
-    detail: str
-    evidence: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -210,44 +226,73 @@ class FlowResult:
 
 
 @dataclass
-class ScoreComponent:
-    name: str
-    raw: float  # 0..1
+class CriterionResult:
+    """One evaluated criterion of a scan. `spec` is the config `Criterion` it came from."""
+
+    check: str
+    label: str
+    status: Tri
     weight: float
-    points: float
-    note: str = ""
+    detail: str
+    evidence: list[str] = field(default_factory=list)
+    signals: list[SignalResult] = field(default_factory=list)
+    spec: Any = field(default=None, repr=False, compare=False)
 
 
 @dataclass
-class Candidate:
+class ScanResult:
+    """One (symbol, scan) evaluation. Ranked by `pct`, the weighted share of criteria met (PENDING_CLOSE counts as
+    not met)."""
+
     symbol: str
-    strategy_id: str
-    strategy_name: str
-    bias: str
-    status: Tri  # TRUE (match) or PENDING
-    rules: list[RuleResult]
+    scan: str  # one of DIRECTIONS
+    criteria: list[CriterionResult]
+    min_pct: float
     flow_label: str
-    primary: SignalResult | None
-    signals: list[SignalResult]
-    score: float = 0.0
-    components: list[ScoreComponent] = field(default_factory=list)
-    stretched: bool = False
-    rank: int = 0
-    strategy_rank: int = 0
-    level_quality: float = 0.0
+    primary: SignalResult | None = None
     alerts: list[AlertPrice] = field(default_factory=list)
+    rank: int = 0
 
     @property
-    def pending(self) -> bool:
-        return self.status is Tri.PENDING
+    def total_weight(self) -> float:
+        return sum(c.weight for c in self.criteria)
+
+    def _share(self, *statuses: Tri) -> float:
+        total = self.total_weight
+        return sum(c.weight for c in self.criteria if c.status in statuses) / total * 100 if total else 0.0
+
+    @property
+    def pct(self) -> float:
+        return self._share(Tri.TRUE)
+
+    @property
+    def pending_pct(self) -> float:
+        return self._share(Tri.PENDING)
+
+    @property
+    def met(self) -> int:
+        return sum(c.status is Tri.TRUE for c in self.criteria)
+
+    @property
+    def total(self) -> int:
+        return len(self.criteria)
+
+    @property
+    def passed(self) -> bool:
+        return bool(self.criteria) and self.pct >= self.min_pct - 1e-9
+
+    @property
+    def signals(self) -> list[SignalResult]:
+        """Signals that fired (or are pending) for this scan's signal criteria, without repeats."""
+        return unique_by_id([h for c in self.criteria for h in c.signals])
 
 
 @dataclass
 class WatchItem:
-    """A near-setup (symbol, signal, level) with every strategy it would serve."""
+    """A near-setup (symbol, signal, level) with every scan whose threshold it would reach."""
 
     symbol: str
-    strategies: list[tuple[str, str]]  # (id, name)
+    scans: list[str]
     near: NearResult
     quality: float
 
@@ -294,7 +339,6 @@ class SymbolAnalysis:
     returns: dict[str, float | None]
     sector_etf: str | None = None
     flow: FlowResult | None = None
-    signal_variants: dict[str, list[SignalResult]] = field(default_factory=dict)
     diagnostics: list[Diagnostic] = field(default_factory=list)
 
     @property

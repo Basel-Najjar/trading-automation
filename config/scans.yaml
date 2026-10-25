@@ -1,0 +1,59 @@
+# scans.yaml: the five scans, most bullish to most bearish. Edit by hand or in the app's Criteria tab (it validates
+# before saving and rewrites this file in this layout, so put notes in a criterion's `label:` rather than in comments).
+#
+# Each scan: enabled, min_pct (listed when the weighted % of criteria met reaches it), lookback_bars (a signal on any
+# of the latest N bars counts; 5 bars ≈ one week) and criteria. Each criterion has exactly one check, an optional
+# weight (default 1) and an optional label:
+#   trend: [uptrend, downtrend, range, mixed]   signal_all / signal_any: [signal names, see docs/signals.md]
+#   rsi_below: 70   rsi_above: 30   rsi_between: [40, 60]   flow: with_flow | not_countertrend
+#   channel: 10 (every close of the last 10 completed bars between a horizontal support and resistance)
+# A signal criterion can narrow the scan's lookback with `within: N`.
+
+bullish:
+  enabled: true
+  min_pct: 65
+  lookback_bars: 5
+  criteria:
+    - {trend: [uptrend], weight: 2}
+    - {signal_any: [resistance_break], weight: 2, label: "2-bar close through resistance"}
+    - {rsi_below: 70, label: "Not extended (RSI below 70)"}
+    - {flow: not_countertrend}
+
+non_bearish:
+  enabled: true
+  min_pct: 70
+  lookback_bars: 10
+  criteria:
+    - {signal_any: [support_held, rising_line_held], weight: 2, label: "Support or rising line held"}
+    - {signal_any: [support_hold], label: "Bullish reversal off support"}
+    - {trend: [uptrend, range, mixed], label: "Not in a downtrend"}
+    - {flow: not_countertrend}
+
+neutral:
+  enabled: true
+  min_pct: 75
+  lookback_bars: 10
+  criteria:
+    - {channel: 10, weight: 2}
+    - {trend: [range, mixed], label: "Not trending"}
+    - {rsi_between: [40, 60]}
+
+non_bullish:
+  enabled: true
+  min_pct: 70
+  lookback_bars: 10
+  criteria:
+    - {signal_any: [resistance_held, falling_line_held], weight: 2, label: "Resistance or falling line held"}
+    - {signal_any: [resistance_hold], label: "Bearish reversal off resistance"}
+    - {trend: [downtrend, range, mixed], label: "Not in an uptrend"}
+    - {flow: not_countertrend}
+
+bearish:
+  enabled: true
+  min_pct: 65
+  lookback_bars: 5
+  criteria:
+    - {trend: [downtrend], weight: 2}
+    - {signal_any: [support_break], weight: 2, label: "2-bar close through support"}
+    - {rsi_above: 30, label: "Not extended (RSI above 30)"}
+    - {flow: not_countertrend}

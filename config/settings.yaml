@@ -43,7 +43,8 @@ levels:
 
 signals:
   full_body_ratio: 0.70
-  break_engulfing_require_opposite_color: false # breaks (spec OQ-1 default)
+  break_confirm: prior_extreme # 2-bar break: prior_extreme (both bars strong, 2nd closes beyond the 1st's high/low) | engulf
+  break_engulfing_require_opposite_color: false # breaks in engulf mode (spec OQ-1 default)
   pattern_engulfing_require_opposite_color: true # [added, decision B3] standalone engulfing patterns
   engulfing_tolerance_atr: 0.0 # [added] body-containment slack, in ATRs
   hold_test_lookback: 3
@@ -51,53 +52,27 @@ signals:
   break_prior_side_bars: 3 # [decision B5] closes before a 2-bar break that must stay on the level's side
   approach_atr: 1.0
   approach_lookback_bars: 3 # [added] "moving toward": closer to the level than this many bars ago
-  max_signal_age_bars: 1
   chase_atr: 1.5
+  held_swing_bars: 5 # [added] *_held: the test bar's low (high) is the lowest (highest) of this many bars before it
+  # how far back signals count is per scan: `lookback_bars` in scans.yaml
 
 range:
   mid_band: [0.35, 0.65]
+  channel_min_touches: 1 # [added] `channel:` criterion: bars touching each side's zone within the window
 
-flow: # [added, decision B2] which trend states agree/oppose each bias
+flow: # [added, decision B2] which trend states agree/oppose each scan direction (the `flow:` criterion)
   agree:
     bullish: [uptrend]
     non_bearish: [uptrend, range]
-    bearish: [downtrend]
-    non_bullish: [downtrend, range]
     neutral: [range]
+    non_bullish: [downtrend, range]
+    bearish: [downtrend]
   oppose:
     bullish: [downtrend]
     non_bearish: [downtrend]
-    bearish: [uptrend]
-    non_bullish: [uptrend]
     neutral: [uptrend, downtrend]
-
-scoring:
-  # Global weights. A strategy can replace any of them with its own `scoring: weights:` in strategies.yaml.
-  weights:
-    {
-      signal: 25,
-      level_quality: 15,
-      confluence: 10,
-      trend_fit: 15,
-      flow: 10,
-      room: 10,
-      rsi_headroom: 5,
-      entry_quality: 5,
-      age: 5,
-    }
-  signal_kind_scores: { break: 1.0, hold: 0.75, pattern: 0.5, context: 0.2 } # [added] divided by the strategy's best kind
-  level_quality_cap: 6.0 # [added] quality at/above this scores 1.0
-  role_reversal_bonus: 0.1 # [added] added to the 0–1 level-quality score for role-reversal levels
-  rsi_headroom_scale: 30.0 # [added] RSI points of headroom that score 1.0
-  rsi_neutral_scale: 20.0 # [added] neutral strategies: RSI this far from 50 scores 0
-  trend_fit_any: 0.5 # [added] trend_fit for strategies with trend [any] (or a mixed trend)
-  trend_step_atr: 2.0 # [added] up/downtrend: smaller of the last pivot-high and pivot-low steps (ATRs) that scores 1.0
-  trend_sma_slope_bars: 10 # [added] SMA50 is rising/falling vs this many bars ago
-  range_touch_cap: 8 # [added] range: boundary touches (high + low) that score 1.0
-  range_width_atr: [2.0, 6.0] # [added] range: width (ATRs) scoring 0 at the first value, 1.0 at the second
-  room_atr: 3.0 # [added] ATRs of clear space to the next opposing level zone that score 1.0
-  flow_scores: { with_flow: 1.0, mixed: 0.5, countertrend: 0.0, ignored: 0.5 } # [added]
-  age_scores: [1.0, 0.5] # [added] by signal age
+    non_bullish: [uptrend]
+    bearish: [uptrend]
 
 display:
   max_watch_items: 30

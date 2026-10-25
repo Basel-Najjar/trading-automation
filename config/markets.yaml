@@ -6,7 +6,7 @@ levels: [SPY, QQQ, IWM, TLT, GLD, SLV, EEM, QQQ/SPY, IWM/SPY, GLD/TLT, XLY/XLP]
 
 rrg:
   benchmark: SPY
-  members: [XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLRE, XLU, XLV, XLY]
+  members: [XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLRE, XLU, XLV, XLY, IWM, GLD, USO, QQQ]
 
 pca:
   members: [SPY, QQQ, IWM, EEM, TLT, GLD, SLV, UUP, HYG, XLE]

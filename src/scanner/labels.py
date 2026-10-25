@@ -5,23 +5,25 @@ from __future__ import annotations
 from scanner.models import SymbolAnalysis, Tri
 
 LABELS = {
-    # biases
-    "bullish": "Bullish", "bearish": "Bearish", "non_bearish": "Not bearish", "non_bullish": "Not bullish",
-    "neutral": "Neutral",
+    # scans
+    "bullish": "Bullish", "non_bearish": "Non-bearish", "neutral": "Neutral", "non_bullish": "Non-bullish",
+    "bearish": "Bearish",
     # flow
-    "with_flow": "With flow", "countertrend": "Against flow", "mixed": "Mixed", "ignored": "Flow ignored",
+    "with_flow": "With flow", "not_countertrend": "Not against flow", "countertrend": "Against flow",
+    "mixed": "Mixed",
     # trend
     "uptrend": "Uptrend", "downtrend": "Downtrend", "range": "Range",
-    # rules
-    "trend": "Trend", "signals_all": "Required", "signals_any": "Trigger", "not_extended": "Not extended",
-    "alignment": "Flow",
+    # criterion checks
+    "trend": "Trend", "signal_all": "All signals", "signal_any": "Any signal", "rsi_below": "RSI below",
+    "rsi_above": "RSI above", "rsi_between": "RSI between", "flow": "Flow", "channel": "Channel",
 }
+DIRECTION_ICON = {"bullish": "▲", "non_bearish": "△", "neutral": "↔", "non_bullish": "▽", "bearish": "▼"}
 TREND_ICON = {"uptrend": "▲", "downtrend": "▼", "range": "↔", "mixed": "≈"}
 STATUS_ICON = {Tri.TRUE: "✓", Tri.FALSE: "✗", Tri.PENDING: "⏳"}
 
 
 def humanize(token: str | None) -> str:
-    """Readable label for a config/scanner identifier (`non_bearish` → "Not bearish", `support_hold` →
+    """Readable label for a config/scanner identifier (`with_flow` → "With flow", `support_hold` →
     "Support hold"). Unknown tokens get underscores replaced and the first letter capitalised."""
     if not token:
         return "n/a"

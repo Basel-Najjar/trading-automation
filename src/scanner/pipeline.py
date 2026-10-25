@@ -6,7 +6,6 @@ structure for bar i is built only from bars ≤ min(i, last completed bar).
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
@@ -18,10 +17,9 @@ from scanner.data import DataResult, PriceProvider, cache_for, ensure_data, prov
 from scanner.flow import period_returns, ratio_trend, state_of
 from scanner.indicators import compute_bars, find_pivots
 from scanner.levels import build_levels, confluence_zones, nearest_levels
-from scanner.models import NA, Bars, Candidate, Diagnostic, FlowResult, SymbolAnalysis, Tech, Tri, WatchItem
-from scanner.scoring import build_watchlist, rank, score_candidate
+from scanner.models import NA, Bars, Diagnostic, FlowResult, ScanResult, SymbolAnalysis, Tech, WatchItem
+from scanner.scans import build_watchlist, evaluate_scan, rank
 from scanner.signals import evaluate_signals, near_signals
-from scanner.strategies import StrategyEval, evaluate_strategy
 from scanner.trend import classify_trend
 
 PARTIAL_MIN_BARS = 60
@@ -34,13 +32,12 @@ class RunResult:
     provisional: bool
     analyses: dict[str, SymbolAnalysis]
     context: dict[str, SymbolAnalysis]
-    evals: dict[str, list[StrategyEval]]
-    candidates: list[Candidate]
+    results: dict[str, dict[str, ScanResult]]  # symbol → scan → evaluation (every active scan)
+    lists: dict[str, list[ScanResult]]  # scan → the tickers that reach its min_pct, ranked
     watchlist: list[WatchItem]
     skipped: list[tuple[str, str]]
     diagnostics: list[Diagnostic]
-    strategies_enabled: list[str]
-    strategies_skipped: list[tuple[str, str]]
+    scans: list[str]  # active scans, in display order
     settings: Settings
     notes: list[str] = field(default_factory=list)
     benchmark: str = "SPY"
@@ -63,25 +60,17 @@ def build_tech(bars: Bars, cutoff: int, s: Settings, manual: list | None = None)
     return Tech(bars, cutoff, highs, lows, levels, trend, notes)
 
 
-def overrides_key(overrides: dict) -> str:
-    return json.dumps(overrides, sort_keys=True) if overrides else ""
-
-
-def signals_for(sa: SymbolAnalysis, strategy) -> list:
-    """The signals a strategy is evaluated on: its overrides' variant, else the default signals."""
-    return sa.signal_variants.get(overrides_key(strategy.technical.overrides), sa.signals)
-
-
 def analyze_symbol(symbol: str, completed: pd.DataFrame, s: Settings, provisional: pd.DataFrame | None = None,
-                   manual: list | None = None, variants: dict[str, Settings] | None = None) -> SymbolAnalysis:
-    """Analyse one symbol. `completed` must already be cut at as-of (completed bars only)."""
+                   manual: list | None = None, lookback_bars: int = 2) -> SymbolAnalysis:
+    """Analyse one symbol. `completed` must already be cut at as-of (completed bars only). Signals are evaluated on
+    the latest `lookback_bars` bars, each with structure built only from the data it had."""
     frame = completed if provisional is None else pd.concat([completed, provisional])
     bars = compute_bars(frame, s)
     last = len(bars) - 1
     done = last - 1 if provisional is not None else last
     by_cutoff: dict[int, Tech] = {}
     techs = []
-    for age in range(s.signals.max_signal_age_bars + 1):
+    for age in range(max(lookback_bars, 1)):
         cutoff = min(last - age, done)
         if cutoff < 1:
             break
@@ -89,16 +78,13 @@ def analyze_symbol(symbol: str, completed: pd.DataFrame, s: Settings, provisiona
             by_cutoff[cutoff] = build_tech(bars, cutoff, s, manual)
         techs.append(by_cutoff[cutoff])
     signals = evaluate_signals(techs, last, s)
-    sv = {"": signals}
-    for key, vs in (variants or {}).items():
-        sv[key] = evaluate_signals(techs, last, vs)
     k = s.levels.zone_atr_mult
     sup, res = nearest_levels(techs[0].levels, last, bars, s.levels.nearest_levels_per_side)
     sa = SymbolAnalysis(
         symbol=symbol, bars=bars, last_idx=last, provisional=provisional is not None, techs=techs,
         signals=signals, confluence=confluence_zones(techs[0].levels, last, bars, k),
         nearest_support=sup, nearest_resistance=res, near=near_signals(techs[0], done, s),
-        returns=period_returns(completed["close"]), signal_variants=sv,
+        returns=period_returns(completed["close"]),
     )
     for note in techs[0].notes:
         sa.diagnostics.append(Diagnostic(symbol, "levels", "info", note))
@@ -117,7 +103,6 @@ def scan(
     *,
     provisional: dict[str, pd.DataFrame] | None = None,
     symbols: list[str] | None = None,
-    strategy_ids: list[str] | None = None,
     diagnostics: list[Diagnostic] | None = None,
     requested_as_of: date | None = None,
     quality: bool = True,
@@ -132,11 +117,7 @@ def scan(
     sector_etfs = _sector_etfs(cfg, universe)
     context_syms = {bench, *sector_etfs}
 
-    strategies = [st for st in cfg.strategies if strategy_ids is None or st.id in strategy_ids]
-    active = [st for st in strategies if st.active]
-    skipped_strats = [(st.id, "disabled") for st in strategies if not st.active]
-    variants = {overrides_key(st.technical.overrides): s.with_overrides(st.technical.overrides)
-                for st in active if st.technical.overrides}
+    active = cfg.active_scans
 
     analyses: dict[str, SymbolAnalysis] = {}
     context: dict[str, SymbolAnalysis] = {}
@@ -186,7 +167,9 @@ def scan(
             in_universe = False  # still needed as benchmark/sector context for flow
         windows[sym] = win
         try:
-            sa = analyze_symbol(sym, win, s, prov, cfg.manual_levels.get(sym), variants)
+            # context-only symbols (benchmark, sector ETFs) feed flow and charts; no scan reads their signals
+            sa = analyze_symbol(sym, win, s, prov, cfg.manual_levels.get(sym),
+                                lookback_bars=cfg.lookback_bars if in_universe else 1)
         except Exception as e:  # per-symbol isolation (NF-5)
             diags.append(Diagnostic(sym, "analysis", "error", f"{type(e).__name__}: {e}"))
             if in_universe:
@@ -225,27 +208,18 @@ def scan(
                 diags.append(Diagnostic(sym, "flow", "warning", f"sector ETF {etf} unavailable — name-vs-sector n/a"))
         sa.flow = FlowResult(market, sector, name, etf, bench)
 
-    # [7] strategy matching, [8] scoring + watch list
-    evals: dict[str, list[StrategyEval]] = {}
-    cands: list[Candidate] = []
-    for sym in sorted(analyses):
-        sa = analyses[sym]
-        evals[sym] = []
-        for st in active:
-            ev = evaluate_strategy(st, sa.trend.state, signals_for(sa, st), sa.flow, s, sa.provisional)
-            evals[sym].append(ev)
-            if ev.status is not Tri.FALSE:
-                cands.append(score_candidate(ev, sa, s))
-    cands = rank(cands)
-    watch = build_watchlist(evals, analyses, s)
+    # [7] scans, [8] ranking by weighted % met + watch list
+    results = {sym: {name: evaluate_scan(name, sc, analyses[sym], s) for name, sc in active.items()}
+               for sym in sorted(analyses)}
+    lists = {name: rank([r[name] for r in results.values() if r[name].passed]) for name in active}
+    watch = build_watchlist(results, analyses, s)
 
     if requested_as_of and requested_as_of != as_of:
         notes.append(f"Requested {requested_as_of} is not a trading day; using prior session {as_of}.")
     return RunResult(
         as_of=as_of, requested_as_of=requested_as_of, provisional=is_prov, analyses=analyses, context=context,
-        evals=evals, candidates=cands, watchlist=watch, skipped=skipped, diagnostics=diags,
-        strategies_enabled=[st.id for st in active], strategies_skipped=skipped_strats, settings=s,
-        notes=notes, benchmark=bench, sector_etfs=sector_etfs,
+        results=results, lists=lists, watchlist=watch, skipped=skipped, diagnostics=diags, scans=list(active),
+        settings=s, notes=notes, benchmark=bench, sector_etfs=sector_etfs,
     )
 
 
@@ -293,8 +267,8 @@ def all_symbols(cfg: Config, symbols: list[str] | None = None) -> list[str]:
 
 
 def run_scan(cfg: Config, *, as_of: date | None = None, now: datetime | None = None,
-             provider: PriceProvider | None = None, refresh: bool = False, symbols: list[str] | None = None,
-             strategy_ids: list[str] | None = None) -> RunResult:
+             provider: PriceProvider | None = None, refresh: bool = False,
+             symbols: list[str] | None = None) -> RunResult:
     """Load prices (cache first) for the session `as_of` resolves to, then `scan`."""
     now = now or datetime.now(sessions.ET)
     s = cfg.settings
@@ -302,4 +276,4 @@ def run_scan(cfg: Config, *, as_of: date | None = None, now: datetime | None = N
     dr = load_data(cfg, all_symbols(cfg, symbols), history_start(session, s), session, now, refresh=refresh,
                    live=live, provider=provider)
     return scan(cfg, dr.completed_frames(), session, provisional=dr.provisional_frames(), symbols=symbols,
-                strategy_ids=strategy_ids, diagnostics=dr.diagnostics, requested_as_of=as_of)
+                diagnostics=dr.diagnostics, requested_as_of=as_of)

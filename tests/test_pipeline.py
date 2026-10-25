@@ -7,7 +7,6 @@ from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from conftest import FakeProvider, random_frame
 from scanner import pipeline, sessions
@@ -25,13 +24,14 @@ def snapshot(res) -> str:
     k = res.settings.levels.zone_atr_mult
     out = {
         "as_of": res.as_of.isoformat(),
-        "candidates": [{"symbol": c.symbol, "strategy": c.strategy_id, "status": c.status.value, "score": c.score,
-                        "rank": c.rank, "primary": _signal(c.primary) if c.primary else None,
-                        "signals": [_signal(x) for x in c.signals],
-                        "rules": [(r.rule, r.status.value, r.detail, r.evidence) for r in c.rules],
-                        "components": [(x.name, x.raw, x.weight, x.points, x.note) for x in c.components],
-                        "alerts": [(a.label, a.price, a.meaning) for a in c.alerts]} for c in res.candidates],
-        "watch": [(w.symbol, w.strategies, w.near.signal, w.near.description, w.near.distance_atr,
+        "results": [{"symbol": r.symbol, "scan": r.scan, "pct": r.pct, "rank": r.rank,
+                     "primary": _signal(r.primary) if r.primary else None,
+                     "signals": [_signal(x) for x in r.signals],
+                     "criteria": [(c.check, c.status.value, c.weight, c.detail, c.evidence) for c in r.criteria],
+                     "alerts": [(a.label, a.price, a.meaning) for a in r.alerts]}
+                    for by_scan in res.results.values() for r in by_scan.values()],
+        "lists": {n: [r.symbol for r in rows] for n, rows in res.lists.items()},
+        "watch": [(w.symbol, w.scans, w.near.signal, w.near.description, w.near.distance_atr,
                    [(a.label, a.price) for a in w.near.triggers]) for w in res.watchlist],
         "symbols": {s: {"trend": sa.trend.state, "reason": sa.trend.reason,
                         "signals": [_signal(x) for x in sa.signals],
@@ -80,8 +80,8 @@ def test_deterministic(cfg, market_frames):
 
 def test_scan_produces_matches_over_many_days(cfg, market_frames):
     days = sessions.sessions_between(date(2026, 3, 2), date(2026, 6, 30))
-    n_cands = sum(len(scan(cfg, market_frames, d, quality=False).candidates) for d in days[::5])
-    assert n_cands > 0  # the engine finds setups on synthetic data
+    n_listed = sum(len(rows) for d in days[::5] for rows in scan(cfg, market_frames, d, quality=False).lists.values())
+    assert n_listed > 0  # the engine finds setups on synthetic data
 
 
 def test_insufficient_history_and_missing_data(cfg, market_frames):
@@ -154,23 +154,25 @@ def test_flow_components_present(cfg, market_frames):
     assert ccc.sector == "n/a" and ccc.name == "n/a"
 
 
-def test_strategy_filter_and_disabled(cfg, market_frames):
-    res = scan(cfg, market_frames, D, strategy_ids=["bull_put_spread", "flyagonal"])
-    assert res.strategies_enabled == ["bull_put_spread"]
-    assert res.strategies_skipped == [("flyagonal", "disabled")]
-    assert all(c.strategy_id == "bull_put_spread" for c in res.candidates)
+def test_disabled_scan_is_not_evaluated(cfg, market_frames):
+    cfg.scans["neutral"].enabled = False
+    res = scan(cfg, market_frames, D)
+    rest = ["bullish", "non_bearish", "non_bullish", "bearish"]
+    assert res.scans == rest and list(res.lists) == rest
+    assert all(list(by_scan) == rest for by_scan in res.results.values())
 
 
-def test_ranking_order(cfg, market_frames):
+def test_lists_hold_passing_results_ranked(cfg, market_frames):
     days = sessions.sessions_between(date(2026, 3, 2), date(2026, 6, 30))
     for d in days[::3]:
         res = scan(cfg, market_frames, d, quality=False)
-        keys = [(c.pending, -c.score, -round(c.level_quality, 9), c.symbol, c.strategy_id) for c in res.candidates]
-        assert keys == sorted(keys)
-        assert [c.rank for c in res.candidates] == list(range(1, len(res.candidates) + 1))
-        for c in res.candidates:
-            assert abs(sum(x.points for x in c.components) - c.score) < 0.01
-            assert 0 <= c.score <= 100
+        assert set(res.results) == set(res.analyses)
+        for name, rows in res.lists.items():
+            assert {r.symbol for r in rows} == {s for s, by in res.results.items() if by[name].passed}
+            keys = [(-round(r.pct, 9), round(r.pending_pct, 9), r.symbol) for r in rows]
+            assert keys == sorted(keys)
+            assert [r.rank for r in rows] == list(range(1, len(rows) + 1))
+            assert all(cfg.scans[name].min_pct <= r.pct <= 100 for r in rows)
 
 
 def test_run_scan_with_fake_provider_and_provisional(cfg, market_frames):
@@ -192,12 +194,3 @@ def test_run_scan_as_of_snaps_to_session(cfg, market_frames):
                    provider=FakeProvider(market_frames))
     assert res.as_of == date(2026, 7, 2) and res.requested_as_of == date(2026, 7, 4)
     assert any("not a trading day" in n for n in res.notes)
-
-
-@pytest.mark.parametrize("overrides", [{"full_body_ratio": 0.99}])
-def test_strategy_overrides_use_signal_variant(cfg, market_frames, overrides):
-    st = cfg.strategy("bear_put_spread")
-    st.technical.overrides = overrides
-    res = scan(cfg, market_frames, D)
-    key = pipeline.overrides_key(overrides)
-    assert all(key in sa.signal_variants for sa in res.analyses.values())

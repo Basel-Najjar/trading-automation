@@ -1,7 +1,7 @@
-"""Criteria view model: the exact scan logic of each strategy, with the live settings values it is evaluated with.
+"""Criteria view model: the exact logic of each scan, with the live settings values it is evaluated with.
 
-Pure functions over a `Config` (no Streamlit). The rule list mirrors `strategies.evaluate_strategy` rule for rule and
-in the same order, so the Criteria tab and the Results rule trace use the same names; a test guards that.
+Pure functions over a `Config` (no Streamlit). The criterion list mirrors `scans.evaluate_scan` one for one and in the
+same order, so the Criteria tab and the Results checklist use the same labels; a test guards that.
 """
 
 from __future__ import annotations
@@ -10,7 +10,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from scanner.config import Config, Settings, Strategy
+from scanner.config import Config, Criterion, Scan, Settings
+from scanner.scans import criterion_label
 from scanner.signals import REGISTRY
 
 TREND_RULES = {
@@ -37,18 +38,20 @@ class SignalCriterion:
 
 @dataclass
 class RuleCriterion:
-    rule: str
+    check: str
+    label: str
+    weight: float
     summary: str
     details: list[str] = field(default_factory=list)
     signals: list[SignalCriterion] = field(default_factory=list)
-    table: list[tuple[str, str, str]] = field(default_factory=list)  # flow table: bias, agree, oppose
+    table: list[tuple[str, str, str]] = field(default_factory=list)  # flow table: direction, agree, oppose
 
 
 @dataclass
-class StrategyCriteria:
-    strategy: Strategy
+class ScanCriteria:
+    name: str
+    scan: Scan
     active: bool
-    overrides: dict[str, Any]
     rules: list[RuleCriterion]
     outcome: list[str]
 
@@ -90,108 +93,69 @@ def _tol(s: Settings) -> str:
             "once those later bars have closed")
 
 
-def _trend_rule(strat: Strategy, s: Settings) -> RuleCriterion:
-    states = strat.technical.trend
-    if states == ["any"]:
-        return RuleCriterion("trend", "Any trend state (always passes).")
-    return RuleCriterion("trend", f"The symbol's trend state must be one of: {', '.join(f'`{t}`' for t in states)}.",
-                         [f"`{t}`: {TREND_RULES[t]}" for t in states] + [_tol(s)])
-
-
-def _signals_rule(rule: str, names: list[str], s: Settings) -> RuleCriterion:
-    joiner = "**All** of these signals must fire" if rule == "signals_all" else "**At least one** of these must fire"
-    age = s.signals.max_signal_age_bars
-    when = ("on the latest bar" if age == 0
-            else f"on the latest bar or up to **{age}** bar{'s' if age != 1 else ''} earlier")
+def _rule(c: Criterion, direction: str, s: Settings, window: int = 1) -> RuleCriterion:
+    label, w, v = criterion_label(c), c.weight, c.value
+    if c.check == "trend":
+        return RuleCriterion("trend", label, w, f"The trend state must be one of: {', '.join(f'`{t}`' for t in v)}.",
+                             [f"`{t}`: {TREND_RULES[t]}" for t in v] + [_tol(s)])
+    if c.check in ("signal_all", "signal_any"):
+        joiner = "**All** of these signals must fire" if c.check == "signal_all" else "**At least one** must fire"
+        when = ("on the latest bar" if window == 1
+                else f"on any of the latest **{window}** bars" + (" (this criterion's `within`)" if c.within else ""))
+        return RuleCriterion(c.check, label, w, f"{joiner} {when}.",
+                             ["Each earlier bar is evaluated with only the data that existed on it."],
+                             [signal_criterion(n, s) for n in v])
+    if c.check == "channel":
+        return RuleCriterion(
+            "channel", label, w,
+            f"Every close of the last **{v}** completed bars stayed between a horizontal support and a horizontal "
+            "resistance.",
+            ["Support and resistance are horizontal levels (pivot clusters, range boundaries or manual horizontal "
+             "levels) known on the bar before the window; sloped lines never count.",
+             "No close below the support's zone low or above the resistance's zone high, and the two zones do not "
+             "overlap.",
+             f"Each side's zone was touched by at least `channel_min_touches` = **{s.range.channel_min_touches}** "
+             "bar(s) of the window (low into the support zone, high into the resistance zone).",
+             "Uses completed bars only, so it is never pending."])
+    if c.check in ("rsi_below", "rsi_above", "rsi_between"):
+        period = s.indicators.rsi_period
+        cond = {"rsi_below": lambda: f"< **{_fmt(v)}**", "rsi_above": lambda: f"> **{_fmt(v)}**",
+                "rsi_between": lambda: f"between **{_fmt(v[0])}** and **{_fmt(v[1])}** (inclusive)"}[c.check]()
+        return RuleCriterion(c.check, label, w, f"RSI({period}) on the latest bar is {cond}.")
+    want = ("the flow label is **with_flow**" if v == "with_flow" else "the flow label is not **countertrend**")
+    agree, oppose = s.flow.agree.get(direction, []), s.flow.oppose.get(direction, [])
     return RuleCriterion(
-        rule, f"{joiner} {when}.",
-        ["Each earlier bar is evaluated with only the data that existed on it.",
-         "On a still-forming bar a signal that would fire is PENDING_CLOSE, which counts as not met."],
-        [signal_criterion(n, s) for n in names])
-
-
-def _not_extended_rule(strat: Strategy, s: Settings) -> RuleCriterion | None:
-    ne = strat.not_extended_resolved
-    if ne not in ("up", "down"):
-        return None
-    how = f"`not_extended: {strat.technical.not_extended}`" + (f" → `{ne}` from bias `{strat.bias}`"
-                                                              if strat.technical.not_extended == "auto" else "")
-    period = s.indicators.rsi_period
-    if ne == "up":
-        cond = f"RSI({period}) ≥ `rsi_overbought` = **{_fmt(s.indicators.rsi_overbought)}**"
-    else:
-        cond = f"RSI({period}) ≤ `rsi_oversold` = **{_fmt(s.indicators.rsi_oversold)}**"
-    return RuleCriterion("not_extended", f"Fails if `extended_{ne}` fires on the latest bar: {cond}.",
-                         [f"From {how}. Only the latest bar is checked, not earlier ones."])
-
-
-def _alignment_rule(strat: Strategy, s: Settings) -> RuleCriterion:
-    mode = strat.technical.alignment
-    w = s.scoring.weights_for(strat).get("flow", 0)
-    summary = {
-        "soft": f"`soft`: always passes. The flow label is recorded on the candidate and scores the flow component "
-                f"(weight {_fmt(w)}).",
-        "required": "`required`: fails if the flow label is **countertrend**.",
-        "ignore": f"`ignore`: always passes; flow is not considered (scores "
-                  f"{_fmt(s.scoring.flow_scores.get('ignored', 0.5))} on the flow component).",
-    }[mode]
-    if mode == "ignore":
-        return RuleCriterion("alignment", summary)
-    agree, oppose = s.flow.agree.get(strat.bias, []), s.flow.oppose.get(strat.bias, [])
-    return RuleCriterion(
-        "alignment", summary,
+        "flow", label, w, f"Met when {want}.",
         [f"Components: market (`{s.data.benchmark}` trend), sector (sector ETF / {s.data.benchmark}), name "
          "(symbol / sector ETF; `n/a` without a sector mapping). Ratios use the same trend logic.",
          f"Label: {FLOW_LABELS}"],
-        table=[(strat.bias, ", ".join(agree) or "—", ", ".join(oppose) or "—")])
+        table=[(direction, ", ".join(agree) or "—", ", ".join(oppose) or "—")])
 
 
-def strategy_rules(strat: Strategy, s: Settings) -> list[RuleCriterion]:
-    """Rules in the order `evaluate_strategy` emits them."""
-    tech = strat.technical
-    rules = [_trend_rule(strat, s)]
-    if tech.signals_all:
-        rules.append(_signals_rule("signals_all", tech.signals_all, s))
-    if tech.signals_any:
-        rules.append(_signals_rule("signals_any", tech.signals_any, s))
-    if (ne := _not_extended_rule(strat, s)) is not None:
-        rules.append(ne)
-    rules.append(_alignment_rule(strat, s))
-    return rules
+def scan_rules(direction: str, scan: Scan, s: Settings) -> list[RuleCriterion]:
+    """Criteria in the order `evaluate_scan` emits them."""
+    return [_rule(c, direction, s, scan.window(c)) for c in scan.criteria]
 
 
-def _outcome(strat: Strategy, s: Settings) -> list[str]:
-    tech = strat.technical
-    sig_names = tech.signals_all + tech.signals_any
-    nears = [n for n in sig_names if REGISTRY[n].near is not None]
-    out = ["**Candidate** when every rule is met. If any rule is only PENDING_CLOSE the candidate is pending and "
-           "ranks after confirmed ones."]
-    if sig_names:
-        watch = ("**Watch list** when every non-signal rule passes and each missing signal is near-firing"
-                 + (f" (near-miss checks exist for {', '.join(f'`{n}`' for n in nears)})." if nears
-                    else "; none of its signals has a near-miss check, so it never reaches the watch list."))
-        out.append(watch)
-    w = s.scoring.weights_for(strat)
-    own = set(strat.scoring.weights)
-    parts = ", ".join(f"{k} **{_fmt(v)}**" + ("" if k in own else "*") for k, v in w.items())
-    out.append(f"Candidates are ranked by score (0–100), a weighted sum scored for this strategy: {parts}"
-               + (" (* = global weight from settings.yaml)." if set(w) - own else "."))
-    return out
+def _outcome(scan: Scan) -> list[str]:
+    total = sum(c.weight for c in scan.criteria)
+    weights = ", ".join(f"{criterion_label(c)} **{_fmt(c.weight)}**" for c in scan.criteria)
+    return [f"**Match %** = weight of the criteria met ÷ total weight ({_fmt(total)}). Weights: {weights}.",
+            f"Listed when the match is at least **{_fmt(scan.min_pct)}%**, highest first. A ticker can be listed in "
+            "more than one scan.",
+            "On a still-forming bar a criterion that would be met is PENDING_CLOSE, which counts as not met; at equal "
+            "match, confirmed tickers rank first.",
+            "**Watch list** when firing a near signal would lift the ticker to the threshold."]
 
 
-def strategy_criteria(cfg: Config) -> list[StrategyCriteria]:
-    out = []
-    for strat in cfg.strategies:
-        s = cfg.settings.with_overrides(strat.technical.overrides)
-        # an inactive strategy with no technical rules has nothing to show
-        rules = [] if strat.technical.is_empty and not strat.active else strategy_rules(strat, s)
-        out.append(StrategyCriteria(strat, strat.active, dict(strat.technical.overrides), rules,
-                                    _outcome(strat, s) if strat.active else []))
-    return out
+def scan_criteria(cfg: Config) -> list[ScanCriteria]:
+    s = cfg.settings
+    return [ScanCriteria(name, sc, sc.active, scan_rules(name, sc, s), _outcome(sc) if sc.active else [])
+            for name, sc in cfg.scans.items()]
 
 
 def global_criteria(cfg: Config) -> list[tuple[str, str]]:
-    """Definitions every strategy shares, with live values: (term, markdown definition)."""
+    """Definitions every scan shares, with live values: (term, markdown definition)."""
     s = cfg.settings
     k = _fmt(s.levels.zone_atr_mult)
     return [
@@ -201,7 +165,7 @@ def global_criteria(cfg: Config) -> list[tuple[str, str]]:
         ("Zone", f"`[level − k·ATR, level + k·ATR]` with `zone_atr_mult` k = **{k}**. For SMAs and diagonals the "
                  "level is the line's value on that bar, so the zone moves with it."),
         ("Levels", f"SMA50/SMA200 (support when price is above, resistance below); horizontal clusters of pivots "
-                   f"(spread ≤ `cluster_atr_mult` = **{_fmt(s.levels.cluster_atr_mult)}** × ATR, ≥ "
+                   f"(width ≤ `cluster_atr_mult` = **{_fmt(s.levels.cluster_atr_mult)}** × ATR, ≥ "
                    f"**{s.levels.min_touches_horizontal}** touches); diagonal trendlines through two pivots within "
                    f"**{s.levels.trendline_lookback_bars}** bars (≥ **{s.levels.min_touches_diagonal}** touches, best "
                    f"**{s.levels.max_trendlines_per_side}** per side); manual levels from `manual_levels.yaml`."),
@@ -209,10 +173,18 @@ def global_criteria(cfg: Config) -> list[tuple[str, str]]:
                    "the same number after; it exists only once those later bars have closed. Pivot lows mirror this."),
         ("Full-bodied", f"`body / range ≥ full_body_ratio` = **{_fmt(s.signals.full_body_ratio)}**; a zero-range bar "
                         "never is."),
+        ("2-bar break", "Bars N-1 and N both close beyond the zone after price was on the level's side. With "
+                        f"`break_confirm` = **{s.signals.break_confirm}**: "
+                        + ("both bars are full-bodied candles in the break direction and N closes beyond N-1's high "
+                           "(bullish) or low (bearish)." if s.signals.break_confirm == "prior_extreme"
+                           else "N is full-bodied in the break direction and its body engulfs N-1's.")),
+        ("Slope", "Horizontal levels are flat. Every other level (diagonal trendline, SMA) is rising or falling by its "
+                  "change into the bar: rising lines that held count toward non-bearish, falling ones toward "
+                  "non-bullish, whether price held above or below them."),
         ("Engulfing", f"Bar N's body covers bar N-1's body within `engulfing_tolerance_atr` = "
-                      f"**{_fmt(s.signals.engulfing_tolerance_atr)}** × ATR. Opposite colours required for breaks: "
-                      f"**{_fmt(s.signals.break_engulfing_require_opposite_color)}**; for patterns: "
+                      f"**{_fmt(s.signals.engulfing_tolerance_atr)}** × ATR. Opposite colours required for breaks "
+                      f"(engulf mode): **{_fmt(s.signals.break_engulfing_require_opposite_color)}**; for patterns: "
                       f"**{_fmt(s.signals.pattern_engulfing_require_opposite_color)}**."),
-        ("PENDING_CLOSE", "During market hours a signal that would fire on the forming bar is pending and counts as "
-                          "not met. Pivots, levels and trend never use a forming bar."),
+        ("PENDING_CLOSE", "During market hours a criterion that would be met on the forming bar is pending and counts "
+                          "as not met. Pivots, levels and trend never use a forming bar."),
     ]

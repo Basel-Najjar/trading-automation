@@ -12,7 +12,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from scanner.models import BIASES, SIGNAL_NAMES, TREND_STATES
+from scanner.models import CHECKS, DIRECTIONS, MAX_LOOKBACK_BARS, SIGNAL_NAMES, TREND_STATES
 
 # ----------------------------------------------------------------------------------------------
 # settings.yaml
@@ -68,6 +68,7 @@ class LevelSettings(Strict):
 
 class SignalSettings(Strict):
     full_body_ratio: float = 0.70
+    break_confirm: Literal["prior_extreme", "engulf"] = "prior_extreme"
     break_engulfing_require_opposite_color: bool = False
     pattern_engulfing_require_opposite_color: bool = True
     engulfing_tolerance_atr: float = 0.0
@@ -76,108 +77,40 @@ class SignalSettings(Strict):
     break_prior_side_bars: int = Field(3, ge=1, le=20)
     approach_atr: float = 1.0
     approach_lookback_bars: int = 3
-    max_signal_age_bars: int = Field(1, ge=0, le=5)
     chase_atr: float = 1.5
+    held_swing_bars: int = Field(5, ge=1, le=20)
 
 
 class RangeSettings(Strict):
     mid_band: tuple[float, float] = (0.35, 0.65)
+    channel_min_touches: int = Field(1, ge=1)
 
 
 def _default_agree() -> dict[str, list[str]]:
-    return {
-        "bullish": ["uptrend"],
-        "non_bearish": ["uptrend", "range"],
-        "bearish": ["downtrend"],
-        "non_bullish": ["downtrend", "range"],
-        "neutral": ["range"],
-    }
+    return {"bullish": ["uptrend"], "non_bearish": ["uptrend", "range"], "neutral": ["range"],
+            "non_bullish": ["downtrend", "range"], "bearish": ["downtrend"]}
 
 
 def _default_oppose() -> dict[str, list[str]]:
-    return {
-        "bullish": ["downtrend"],
-        "non_bearish": ["downtrend"],
-        "bearish": ["uptrend"],
-        "non_bullish": ["uptrend"],
-        "neutral": ["uptrend", "downtrend"],
-    }
+    return {"bullish": ["downtrend"], "non_bearish": ["downtrend"], "neutral": ["uptrend", "downtrend"],
+            "non_bullish": ["uptrend"], "bearish": ["uptrend"]}
+
+
+def _flow_table(v: dict[str, list[str]]) -> dict[str, list[str]]:
+    for d, states in v.items():
+        if d not in DIRECTIONS:
+            raise ValueError(f"unknown direction '{d}'{_suggest(d, DIRECTIONS)}; allowed: {list(DIRECTIONS)}")
+        for t in states:
+            if t not in TREND_STATES:
+                raise ValueError(f"invalid trend state '{t}'{_suggest(t, TREND_STATES)}")
+    return v
 
 
 class FlowSettings(Strict):
     agree: dict[str, list[str]] = Field(default_factory=_default_agree)
     oppose: dict[str, list[str]] = Field(default_factory=_default_oppose)
 
-
-SCORE_COMPONENTS: tuple[str, ...] = ("signal", "level_quality", "confluence", "trend_fit", "flow", "room",
-                                      "rsi_headroom", "entry_quality", "age")
-
-
-def _known_weights(v: dict[str, float]) -> dict[str, float]:
-    unknown = set(v) - set(SCORE_COMPONENTS)
-    if unknown:
-        bad = sorted(unknown)
-        raise ValueError(f"unknown weight(s) {bad}{_suggest(bad[0], SCORE_COMPONENTS)}; "
-                         f"allowed: {list(SCORE_COMPONENTS)}")
-    if any(w < 0 for w in v.values()):
-        raise ValueError("weights must be ≥ 0")
-    return v
-
-
-class ScoringSettings(Strict):
-    weights: dict[str, float] = Field(
-        default_factory=lambda: {
-            "signal": 25,
-            "level_quality": 15,
-            "confluence": 10,
-            "trend_fit": 15,
-            "flow": 10,
-            "room": 10,
-            "rsi_headroom": 5,
-            "entry_quality": 5,
-            "age": 5,
-        }
-    )
-    signal_kind_scores: dict[str, float] = Field(
-        default_factory=lambda: {"break": 1.0, "hold": 0.75, "pattern": 0.5, "context": 0.2}
-    )
-    level_quality_cap: float = 6.0
-    role_reversal_bonus: float = 0.1
-    rsi_headroom_scale: float = 30.0
-    rsi_neutral_scale: float = 20.0
-    trend_fit_any: float = 0.5
-    trend_step_atr: float = 2.0
-    trend_sma_slope_bars: int = 10
-    range_touch_cap: int = 8
-    range_width_atr: list[float] = Field(default_factory=lambda: [2.0, 6.0])
-    room_atr: float = 3.0
-    flow_scores: dict[str, float] = Field(
-        default_factory=lambda: {"with_flow": 1.0, "mixed": 0.5, "countertrend": 0.0, "ignored": 0.5}
-    )
-    age_scores: list[float] = Field(default_factory=lambda: [1.0, 0.5])
-
-    @field_validator("weights")
-    @classmethod
-    def _weights(cls, v: dict[str, float]) -> dict[str, float]:
-        return _known_weights(v)
-
-    @field_validator("range_width_atr")
-    @classmethod
-    def _width(cls, v: list[float]) -> list[float]:
-        if len(v) != 2 or not 0 <= v[0] < v[1]:
-            raise ValueError("range_width_atr must be [min, full] with 0 ≤ min < full")
-        return v
-
-    @field_validator("trend_step_atr", "room_atr", "rsi_neutral_scale", "rsi_headroom_scale", "level_quality_cap")
-    @classmethod
-    def _positive(cls, v: float) -> float:
-        if v <= 0:
-            raise ValueError("must be > 0")
-        return v
-
-    def weights_for(self, strat: Strategy) -> dict[str, float]:
-        """Global weights with the strategy's `scoring.weights` laid over them."""
-        return {**self.weights, **strat.scoring.weights}
+    _tables = field_validator("agree", "oppose")(_flow_table)
 
 
 class DisplaySettings(Strict):
@@ -194,28 +127,15 @@ class Settings(Strict):
     signals: SignalSettings = Field(default_factory=SignalSettings)
     range: RangeSettings = Field(default_factory=RangeSettings)
     flow: FlowSettings = Field(default_factory=FlowSettings)
-    scoring: ScoringSettings = Field(default_factory=ScoringSettings)
     display: DisplaySettings = Field(default_factory=DisplaySettings)
 
     @property
     def window_bars(self) -> int:
         return max(int(round(self.data.history_years * 252)), self.data.min_bars)
 
-    def with_overrides(self, overrides: dict[str, Any]) -> Settings:
-        """Apply per-strategy overrides (signal-stage keys only, see OVERRIDABLE_KEYS)."""
-        if not overrides:
-            return self
-        sig = self.signals.model_copy(update={k: v for k, v in overrides.items() if k in SignalSettings.model_fields})
-        ind = self.indicators.model_copy(
-            update={k: v for k, v in overrides.items() if k in ("rsi_overbought", "rsi_oversold")}
-        )
-        return self.model_copy(update={"signals": sig, "indicators": ind})
-
-
-OVERRIDABLE_KEYS: frozenset[str] = frozenset(SignalSettings.model_fields) | {"rsi_overbought", "rsi_oversold"}
 
 # ----------------------------------------------------------------------------------------------
-# strategies.yaml
+# scans.yaml
 # ----------------------------------------------------------------------------------------------
 
 
@@ -224,109 +144,113 @@ def _suggest(name: str, choices: tuple[str, ...] | list[str] | frozenset[str]) -
     return f" — did you mean '{match[0]}'?" if match else ""
 
 
-def _none_to_list(v: Any) -> Any:
-    return [] if v is None else v
+class Criterion(Strict):
+    """One check of a scan: exactly one of the CHECKS keys, plus an optional `weight` and display `label`."""
 
-
-class Technical(Strict):
-    trend: list[str] = Field(default_factory=lambda: ["any"])
-    signals_all: list[str] = Field(default_factory=list)
-    signals_any: list[str] = Field(default_factory=list)
-    not_extended: Literal["auto", "none", "up", "down"] = "auto"
-    alignment: Literal["soft", "required", "ignore"] = "soft"
-    overrides: dict[str, float | int | bool] = Field(default_factory=dict)
-
-    _lists = field_validator("trend", "signals_all", "signals_any", mode="before")(_none_to_list)
+    trend: list[str] | None = None
+    signal_all: list[str] | None = None
+    signal_any: list[str] | None = None
+    rsi_below: float | None = Field(None, ge=0, le=100)
+    rsi_above: float | None = Field(None, ge=0, le=100)
+    rsi_between: tuple[float, float] | None = None
+    flow: Literal["with_flow", "not_countertrend"] | None = None
+    channel: int | None = Field(None, ge=3, le=MAX_LOOKBACK_BARS)
+    within: int | None = Field(None, ge=1, le=MAX_LOOKBACK_BARS)
+    weight: float = Field(1.0, gt=0)
+    label: str = ""
 
     @field_validator("trend")
     @classmethod
-    def _trend(cls, v: list[str]) -> list[str]:
-        if not v:
-            return ["any"]
-        for t in v:
-            if t != "any" and t not in TREND_STATES:
-                raise ValueError(f"invalid trend state '{t}'{_suggest(t, (*TREND_STATES, 'any'))}")
-        if "any" in v and len(v) > 1:
-            raise ValueError("'any' cannot be combined with other trend states")
+    def _trend(cls, v: list[str] | None) -> list[str] | None:
+        if v is not None:
+            if not v:
+                raise ValueError("list at least one trend state")
+            for t in v:
+                if t not in TREND_STATES:
+                    raise ValueError(f"invalid trend state '{t}'{_suggest(t, TREND_STATES)}")
         return v
 
-    @field_validator("signals_all", "signals_any")
+    @field_validator("signal_all", "signal_any")
     @classmethod
-    def _signals(cls, v: list[str]) -> list[str]:
-        for s in v:
-            if s not in SIGNAL_NAMES:
-                raise ValueError(f"unknown signal '{s}'{_suggest(s, SIGNAL_NAMES)}")
+    def _signals(cls, v: list[str] | None) -> list[str] | None:
+        if v is not None:
+            if not v:
+                raise ValueError("list at least one signal")
+            for s in v:
+                if s not in SIGNAL_NAMES:
+                    raise ValueError(f"unknown signal '{s}'{_suggest(s, SIGNAL_NAMES)}")
         return v
 
-    @field_validator("overrides")
+    @field_validator("rsi_between")
     @classmethod
-    def _overrides(cls, v: dict[str, Any]) -> dict[str, Any]:
-        for k in v:
-            if k not in OVERRIDABLE_KEYS:
-                raise ValueError(
-                    f"override '{k}' not allowed{_suggest(k, OVERRIDABLE_KEYS)} "
-                    "(v1 allows signal-stage keys and rsi thresholds only)"
-                )
+    def _between(cls, v: tuple[float, float] | None) -> tuple[float, float] | None:
+        if v is not None and not 0 <= v[0] < v[1] <= 100:
+            raise ValueError("rsi_between must be [low, high] with 0 ≤ low < high ≤ 100")
         return v
+
+    @model_validator(mode="after")
+    def _one_check(self) -> Criterion:
+        given = [c for c in CHECKS if getattr(self, c) is not None]
+        if len(given) != 1:
+            raise ValueError(f"each criterion needs exactly one of {list(CHECKS)}; got {given or 'none'}")
+        if self.within is not None and given[0] not in ("signal_all", "signal_any"):
+            raise ValueError("`within` applies only to signal_all / signal_any criteria")
+        return self
 
     @property
-    def is_empty(self) -> bool:
-        return self.trend == ["any"] and not self.signals_all and not self.signals_any
+    def check(self) -> str:
+        return next(c for c in CHECKS if getattr(self, c) is not None)
+
+    @property
+    def value(self) -> Any:
+        return getattr(self, self.check)
+
+    @property
+    def signal_names(self) -> list[str]:
+        return list(self.value) if self.check in ("signal_all", "signal_any") else []
 
 
-class StrategyScoring(Strict):
-    """Per-strategy score weights; keys given here replace the global `settings.yaml → scoring.weights`."""
+class Scan(Strict):
+    enabled: bool = True
+    min_pct: float = Field(70.0, ge=0, le=100)
+    lookback_bars: int = Field(5, ge=1, le=MAX_LOOKBACK_BARS)  # a signal on any of the latest N bars counts
+    criteria: list[Criterion] = Field(default_factory=list)
 
-    weights: dict[str, float] = Field(default_factory=dict)
-
-    @field_validator("weights", mode="before")
+    @field_validator("criteria", mode="before")
     @classmethod
     def _none(cls, v: Any) -> Any:
-        return {} if v is None else v
-
-    @field_validator("weights")
-    @classmethod
-    def _weights(cls, v: dict[str, float]) -> dict[str, float]:
-        return _known_weights(v)
-
-
-class Strategy(BaseModel):
-    model_config = ConfigDict(extra="allow")  # unknown display-only keys are preserved and shown
-
-    id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
-    name: str
-    enabled: bool = True
-    bias: Literal["bullish", "bearish", "non_bearish", "non_bullish", "neutral"]
-    description: str = ""
-    technical: Technical = Field(default_factory=Technical)
-    scoring: StrategyScoring = Field(default_factory=StrategyScoring)
-
-    @field_validator("technical", "scoring", mode="before")
-    @classmethod
-    def _none_to_dict(cls, v: Any) -> Any:
-        return {} if v is None else v
-
-    @field_validator("bias", mode="before")
-    @classmethod
-    def _bias(cls, v: Any) -> Any:
-        if isinstance(v, str) and v not in BIASES:
-            raise ValueError(f"invalid bias '{v}'{_suggest(v, BIASES)}")
-        return v
+        return [] if v is None else v
 
     @property
     def active(self) -> bool:
-        return self.enabled
+        return self.enabled and bool(self.criteria)
+
+    def window(self, c: Criterion) -> int:
+        """Bars a signal criterion looks back over: its own `within`, else the scan's `lookback_bars`."""
+        return c.within or self.lookback_bars
 
     @property
-    def not_extended_resolved(self) -> str:
-        ne = self.technical.not_extended
-        if ne != "auto":
-            return ne
-        return {"bullish": "up", "bearish": "down"}.get(self.bias, "none")
+    def bars_needed(self) -> int:
+        """Bars (latest first) that need their own structure: every signal window, and a channel's window plus the
+        bar before it, whose structure the channel is drawn from (one more when the latest bar is still forming)."""
+        need = [self.lookback_bars] + [c.within or 0 for c in self.criteria]
+        need += [c.channel + 2 for c in self.criteria if c.channel]
+        return max(need)
 
-    @property
-    def extra_fields(self) -> dict[str, Any]:
-        return dict(self.model_extra or {})
+
+class ScansFile(Strict):
+    bullish: Scan | None = None
+    non_bearish: Scan | None = None
+    neutral: Scan | None = None
+    non_bullish: Scan | None = None
+    bearish: Scan | None = None
+
+    def as_dict(self) -> dict[str, Scan]:
+        """Every direction; one missing from the file is a disabled scan with no criteria."""
+        return {d: getattr(self, d) or Scan(enabled=False) for d in DIRECTIONS}
+
+    def missing(self) -> list[str]:
+        return [d for d in DIRECTIONS if getattr(self, d) is None]
 
 
 # ----------------------------------------------------------------------------------------------
@@ -387,7 +311,7 @@ def has_errors(issues: list[Issue]) -> bool:
 class Config:
     root: Path
     settings: Settings
-    strategies: list[Strategy]
+    scans: dict[str, Scan]  # every direction, in DIRECTIONS order
     universe: list[UniverseEntry]
     sector_map: dict[str, str]
     manual_levels: dict[str, list[ManualLevel]] = field(default_factory=dict)
@@ -396,11 +320,17 @@ class Config:
     def symbols(self) -> list[str]:
         return [u.symbol for u in self.universe if u.enabled]
 
+    @property
+    def active_scans(self) -> dict[str, Scan]:
+        return {d: s for d, s in self.scans.items() if s.active}
+
+    @property
+    def lookback_bars(self) -> int:
+        """Latest bars the active scans evaluate, each with structure built from the data it had."""
+        return max((s.bars_needed for s in self.active_scans.values()), default=1)
+
     def sector_for(self, symbol: str) -> str | None:
         return self.sector_map.get(symbol)
-
-    def strategy(self, sid: str) -> Strategy | None:
-        return next((s for s in self.strategies if s.id == sid), None)
 
 
 # ----------------------------------------------------------------------------------------------
@@ -452,7 +382,8 @@ def _fmt_loc(loc: tuple) -> str:
 
 
 def pydantic_issues(
-    err: ValidationError, fname: str, lines: dict[tuple, int], prefix: tuple = (), label: str = ""
+    err: ValidationError, fname: str, lines: dict[tuple, int], prefix: tuple = (), label: str = "",
+    root: type[BaseModel] | None = None,
 ) -> list[Issue]:
     issues = []
     for e in err.errors():
@@ -460,25 +391,30 @@ def pydantic_issues(
         msg = e["msg"].removeprefix("Value error, ")
         if e["type"] == "extra_forbidden":
             key = loc[-1] if loc else "?"
-            sibling_fields = _known_fields_at(loc[:-1])
+            sibling_fields = _known_fields_at(loc[:-1], root or Settings)
             msg = f"unknown key '{key}'{_suggest(str(key), sibling_fields)}"
         where = (label + _fmt_loc(loc)) if label else _fmt_loc(loc)
         issues.append(Issue(fname, line_for(lines, prefix + loc), where, msg))
     return issues
 
 
-def _known_fields_at(loc: tuple) -> list[str]:
-    model: Any = Settings
+def _model_in(annotation: Any) -> Any:
+    """The pydantic model an annotation holds (itself, or the item type of a list/optional)."""
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+    return next((a for a in getattr(annotation, "__args__", ()) if isinstance(a, type) and issubclass(a, BaseModel)),
+                None)
+
+
+def _known_fields_at(loc: tuple, root: Any) -> list[str]:
+    model: Any = root
     for p in loc:
         if isinstance(p, int):
             continue
         f = getattr(model, "model_fields", {}).get(p)
         if f is None:
-            model = Technical if p == "technical" else None
-            if model is None:
-                return []
-            continue
-        model = f.annotation
+            return []
+        model = _model_in(f.annotation)
     return list(getattr(model, "model_fields", {}).keys())
 
 
@@ -491,6 +427,12 @@ REMOVED_SETTINGS = {
     "report": "static reports were removed; rename this section to `display:` and keep only max_watch_items, "
               "max_watch_items_per_symbol and chart_bars",
     "replay": "replay was removed; delete this section",
+    "scoring": "weighted scores were removed; scans rank by the weighted % of criteria met (set `weight:` on a "
+               "criterion in scans.yaml); delete this section",
+}
+REMOVED_SETTING_KEYS = {
+    ("signals", "max_signal_age_bars"): "each scan now sets its own `lookback_bars` in scans.yaml (and a signal "
+                                        "criterion can narrow it with `within:`); delete this line",
 }
 
 
@@ -507,6 +449,10 @@ def load_settings(path: Path, issues: list[Issue]) -> Settings | None:
     for key, why in REMOVED_SETTINGS.items():
         if key in data:
             issues.append(Issue(path.name, line_for(lines, (key,)), key, f"no longer supported: {why}"))
+    for (section, key), why in REMOVED_SETTING_KEYS.items():
+        if isinstance(data.get(section), dict) and key in data[section]:
+            issues.append(Issue(path.name, line_for(lines, (section, key)), f"{section}.{key}",
+                                f"no longer supported: {why}"))
     if has_errors(issues):
         return None
     try:
@@ -514,13 +460,6 @@ def load_settings(path: Path, issues: list[Issue]) -> Settings | None:
     except ValidationError as e:
         issues.extend(pydantic_issues(e, path.name, lines))
         return None
-    w = s.scoring.weights
-    if abs(sum(w.values()) - 100) > 1e-6:
-        issues.append(
-            Issue(path.name, line_for(lines, ("scoring", "weights")), "scoring.weights",
-                  f"weights sum to {sum(w.values()):g}; scores are scaled to 0–100 only when they sum to 100",
-                  "warning")
-        )
     lo, hi = s.range.mid_band
     if not 0 <= lo < hi <= 1:
         issues.append(Issue(path.name, line_for(lines, ("range", "mid_band")), "range.mid_band",
@@ -529,64 +468,47 @@ def load_settings(path: Path, issues: list[Issue]) -> Settings | None:
     return s
 
 
-REMOVED_STRATEGY_KEYS = ("status", "construction", "orats_checklist", "other_manual_checks", "plan")
-
-
-def load_strategies(path: Path, issues: list[Issue]) -> list[Strategy] | None:
+def load_scans(path: Path, issues: list[Issue]) -> dict[str, Scan] | None:
+    """scans.yaml: a mapping keyed by the DIRECTIONS. A missing key is a disabled scan with no criteria (warned)."""
     if not path.exists():
         issues.append(Issue(path.name, None, "", "file missing (required)"))
         return None
     data, lines = read_yaml(path, issues)
     if data is None:
-        return None if any(i.file == path.name for i in issues) else []
-    if not isinstance(data, list):
-        issues.append(Issue(path.name, 1, "", "top level must be a list of strategies (each starting with '- id:')"))
+        if any(i.file == path.name for i in issues):
+            return None
+        data = {}
+    if not isinstance(data, dict):
+        issues.append(Issue(path.name, 1, "", f"top level must be a mapping with the keys {list(DIRECTIONS)}"))
         return None
-    out: list[Strategy] = []
-    ok = True
-    seen: dict[str, int] = {}
-    for i, raw in enumerate(data):
-        sid = raw.get("id", f"#{i}") if isinstance(raw, dict) else f"#{i}"
-        label = f"strategies[{i}] ({sid})"
-        if not isinstance(raw, dict):
-            issues.append(Issue(path.name, line_for(lines, (i,)), label, "each strategy must be a mapping"))
-            ok = False
-            continue
-        raw_id = raw.get("id")
-        if isinstance(raw_id, str):
-            if raw_id in seen:
-                issues.append(Issue(path.name, line_for(lines, (i, "id")), label,
-                                    f"duplicate id '{raw_id}' (first defined on line {seen[raw_id]})"))
-                ok = False
-            seen.setdefault(raw_id, line_for(lines, (i, "id")) or 0)
-        removed = [k for k in REMOVED_STRATEGY_KEYS if k in raw]
-        for k in removed:
-            issues.append(Issue(path.name, line_for(lines, (i, k)), label + f".{k}",
-                                "no longer supported: the scanner keeps technical parameters only (non-technical "
-                                "playbook fields were removed); delete this key"))
-        if removed:
-            ok = False
-            continue
-        try:
-            s = Strategy.model_validate(raw)
-        except ValidationError as e:
-            issues.extend(pydantic_issues(e, path.name, lines, prefix=(i,), label=label + "."))
-            ok = False
-            continue
-        if s.active and s.technical.is_empty:
-            issues.append(Issue(path.name, line_for(lines, (i, "technical")), label,
-                                "enabled strategy has no technical rules — it would match every symbol",
-                                "warning"))
-        out.append(s)
-    return out if ok else None
+    try:
+        parsed = ScansFile.model_validate(data)
+    except ValidationError as e:
+        issues.extend(pydantic_issues(e, path.name, lines, root=ScansFile))
+        return None
+    scans = parsed.as_dict()
+    if missing := parsed.missing():
+        issues.append(Issue(path.name, None, "", f"no {', '.join(missing)} scan in the file — "
+                                                 f"{'it is' if len(missing) == 1 else 'they are'} off; use Restore "
+                                                 "defaults in the Criteria tab (or add the key) to turn "
+                                                 f"{'it' if len(missing) == 1 else 'them'} on", "warning"))
+    for d, s in scans.items():
+        if s.enabled and not s.criteria:
+            issues.append(Issue(path.name, line_for(lines, (d,)), d, "enabled scan has no criteria — it is not "
+                                                                       "evaluated", "warning"))
+    return scans
 
 
 def clean_symbol(s: str) -> str:
     return s.strip().upper()
 
 
+_STRATEGIES_GONE = ("strategies were replaced by the bullish, non-bearish, neutral, non-bullish and bearish scans in "
+                    "scans.yaml; move any rules you want to keep there and delete {}")
 LEGACY_FILES = {
     "expected_reads.csv": "check-reads (and replay) were removed; delete expected_reads.csv",
+    "strategies.yaml": _STRATEGIES_GONE.format("strategies.yaml"),
+    "strategies.default.yaml": _STRATEGIES_GONE.format("strategies.default.yaml"),
     "universe.txt": "symbols now live only in universe.csv (columns symbol,type,sector_etf,enabled,notes); move the "
                     "symbols there and delete universe.txt",
     "sector_map.csv": "sector ETFs now live in universe.csv's sector_etf column; move the mappings there and delete "
@@ -673,20 +595,6 @@ def load_manual_levels(root: Path, issues: list[Issue]) -> dict[str, list[Manual
     return out
 
 
-def _weight_sum_issues(path: Path, settings: Settings, strategies: list[Strategy]) -> list[Issue]:
-    """Warn for each strategy whose global + own weights do not sum to 100 (scores are then not 0–100)."""
-    out = []
-    for st in strategies:
-        if not st.scoring.weights:
-            continue
-        total = sum(settings.scoring.weights_for(st).values())
-        if abs(total - 100) > 1e-6:
-            out.append(Issue(path.name, None, f"{st.id}.scoring.weights",
-                             f"weights (global + this strategy's) sum to {total:g}; scores are scaled to 0–100 "
-                             "only when they sum to 100", "warning"))
-    return out
-
-
 def load_config(root: Path) -> tuple[Config | None, list[Issue]]:
     """Load and validate every owner-maintained file. Returns (None, issues) when any error is present."""
     root = Path(root)
@@ -694,11 +602,13 @@ def load_config(root: Path) -> tuple[Config | None, list[Issue]]:
     if not root.is_dir():
         return None, [Issue(str(root), None, "", "config directory not found")]
     settings = load_settings(root / "settings.yaml", issues)
-    strategies = load_strategies(root / "strategies.yaml", issues)
+    scans = load_scans(root / "scans.yaml", issues)
     universe = load_universe(root, issues)
     sector_map = sector_map_of(universe) if universe is not None else {}
     manual = load_manual_levels(root, issues)
-    if has_errors(issues) or None in (settings, strategies, universe):
+    if has_errors(issues) or None in (settings, scans, universe):
         return None, issues
-    issues += _weight_sum_issues(root / "strategies.yaml", settings, strategies)
-    return Config(root, settings, strategies, universe, sector_map, manual), issues
+    if not any(s.active for s in scans.values()):
+        issues.append(Issue("scans.yaml", None, "", "no enabled scan has criteria — nothing will be listed",
+                            "warning"))
+    return Config(root, settings, scans, universe, sector_map, manual), issues

@@ -1,10 +1,10 @@
-"""Criteria tab: the rule list mirrors evaluate_strategy, with live (override-aware) settings values."""
+"""Criteria tab: the criterion list mirrors evaluate_scan, with live settings values."""
 
 from __future__ import annotations
 
 from datetime import date
 
-from scanner.criteria import global_criteria, signal_text, strategy_criteria
+from scanner.criteria import global_criteria, scan_criteria, signal_text
 from scanner.pipeline import scan
 from scanner.signals import REGISTRY
 
@@ -13,13 +13,15 @@ D = date(2026, 9, 30)
 
 def test_rules_match_evaluator_order(cfg, market_frames):
     res = scan(cfg, market_frames, D)
-    by_id = {c.strategy.id: c for c in strategy_criteria(cfg)}
+    by_name = {c.name: c for c in scan_criteria(cfg)}
     seen = set()
-    for evs in res.evals.values():
-        for ev in evs:
-            assert [r.rule for r in by_id[ev.strategy.id].rules] == [r.rule for r in ev.rules]
-            seen.add(ev.strategy.id)
-    assert seen == {s.id for s in cfg.strategies if s.active}
+    for by_scan in res.results.values():
+        for name, r in by_scan.items():
+            crit = by_name[name]
+            assert [(x.check, x.label, x.weight) for x in crit.rules] == \
+                [(x.check, x.label, x.weight) for x in r.criteria]
+            seen.add(name)
+    assert seen == set(cfg.active_scans)
 
 
 def test_every_signal_param_resolved(cfg):
@@ -29,27 +31,22 @@ def test_every_signal_param_resolved(cfg):
             if f"`{p}`" in d.description:
                 assert f"`{p}` = **" in text
         assert "(default" not in text
-    names = {n for s in cfg.strategies for n in s.technical.signals_all + s.technical.signals_any}
+    names = {n for sc in cfg.scans.values() for c in sc.criteria for n in c.signal_names}
     assert names <= set(REGISTRY)
 
 
-def test_overrides_shown(cfg):
-    cfg.strategy("bull_call_spread").technical.overrides = {"full_body_ratio": 0.8}
-    c = next(c for c in strategy_criteria(cfg) if c.strategy.id == "bull_call_spread")
-    assert c.overrides == {"full_body_ratio": 0.8}
-    sig = next(r for r in c.rules if r.rule == "signals_all").signals[0]
-    assert ("full_body_ratio", 0.8) in sig.params
+def test_rsi_and_flow_rules(cfg):
+    by_name = {c.name: c for c in scan_criteria(cfg)}
+    rsi = next(r for r in by_name["bullish"].rules if r.check == "rsi_below")
+    assert "< **70**" in rsi.summary
+    flow = next(r for r in by_name["bearish"].rules if r.check == "flow")
+    assert flow.table == [("bearish", "downtrend", "uptrend")]
+    assert any(f"{cfg.scans['neutral'].min_pct:g}%" in x for x in by_name["neutral"].outcome)
 
 
-def test_not_extended(cfg):
-    by_id = {c.strategy.id: c for c in strategy_criteria(cfg)}
-    assert "not_extended" not in [r.rule for r in by_id["bull_put_spread"].rules]
-    ne = next(r for r in by_id["bull_call_spread"].rules if r.rule == "not_extended")
-    assert f"`rsi_overbought` = **{cfg.settings.indicators.rsi_overbought:g}**" in ne.summary
-
-
-def test_disabled_strategy_without_rules_has_no_criteria(cfg):
-    c = next(c for c in strategy_criteria(cfg) if c.strategy.id == "flyagonal")
+def test_inactive_scan_has_no_outcome(cfg):
+    cfg.scans["neutral"].criteria = []
+    c = next(c for c in scan_criteria(cfg) if c.name == "neutral")
     assert not c.active and c.rules == [] and c.outcome == []
 
 
